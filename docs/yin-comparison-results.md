@@ -3,6 +3,8 @@
 **Date**: 2026-02-28
 **Song**: "Feeling Good" (cmlkprw8y0007mh01gcwzvozs) — vocal stem, 238s
 
+**Context**: This comparison was performed to evaluate whether the on-device YIN algorithm produces reference pitch data comparable to pYIN (librosa). The results confirmed that on-device YIN is accurate enough for both real-time detection and batch reference pitch extraction, enabling the fully on-device architecture (no Python worker needed).
+
 ## Algorithms Compared
 
 | Parameter            | iOS YIN (real-time)        | Offline pYIN (librosa)            |
@@ -13,7 +15,7 @@
 | Hop size             | 256 samples (5.8 ms)       | 512 samples (11.6 ms)             |
 | YIN threshold        | 0.10                       | N/A (HMM-based)                   |
 | Confidence threshold | 0.85                       | N/A (HMM-based)                   |
-| Frequency range      | 80–1,100 Hz                | 65–2,093 Hz                       |
+| Frequency range      | 80-1,100 Hz                | 65-2,093 Hz                       |
 | RMS noise floor      | 0.01 (was) / 0.005 (now)   | None                              |
 
 ## Results (before tuning, RMS = 0.01)
@@ -27,7 +29,7 @@
 | Metric                                   | Value                   |
 | ---------------------------------------- | ----------------------- |
 | Voiced frame match rate                  | 76.4% (9,832 / 12,863)  |
-| Pitch accuracy (within ±1 semitone)      | 92.2% of matched        |
+| Pitch accuracy (within +/-1 semitone)    | 92.2% of matched        |
 | Median pitch difference                  | 0.17 semitones          |
 | Mean pitch difference                    | 0.63 semitones (7.7 Hz) |
 | 95th percentile difference               | 1.39 semitones          |
@@ -77,9 +79,9 @@ Changed `PitchConstants.rmsNoiseFloor` from `0.01` (~-40 dB) to `0.005` (~-46 dB
 
 **Impact**:
 
-- Match rate: 76.4% → 78.7% (+2.3%)
-- Accuracy: 92.2% → 91.7% (negligible loss)
-- False positives: 277 → 300 (+23, minimal)
+- Match rate: 76.4% -> 78.7% (+2.3%)
+- Accuracy: 92.2% -> 91.7% (negligible loss)
+- False positives: 277 -> 300 (+23, minimal)
 - Picks up quiet vocal passages previously gated as silence
 
 ## Key Takeaways
@@ -89,8 +91,9 @@ Changed `PitchConstants.rmsNoiseFloor` from `0.01` (~-40 dB) to `0.005` (~-46 dB
 3. **iOS YIN is intentionally conservative** — for real-time singing, false positives (phantom notes) are worse than missed frames.
 4. **RMS noise floor is the biggest tuning lever** — it alone accounts for 20% of missed frames.
 5. **The confidence threshold at 0.85 sits at a natural break point** — the confidence distribution shows a gradual falloff, so lowering it yields diminishing returns with more noise.
+6. **On-device YIN is viable for batch reference extraction** — the accuracy difference vs pYIN is small enough that a Python worker is not needed. This enabled the fully on-device IntonavioLocal architecture.
 
-## Sample: Frame-by-frame comparison (6–30s)
+## Sample: Frame-by-frame comparison (6-30s)
 
 ```
    Time |   Ref Hz  Ref MIDI |  pYIN Hz pYIN MIDI |   iOS Hz  iOS MIDI
@@ -109,4 +112,4 @@ Changed `PitchConstants.rmsNoiseFloor` from `0.01` (~-40 dB) to `0.005` (~-46 dB
    29.5 |    146.8      50.0 |    146.8      50.0 |    145.6      49.9
 ```
 
-Where both detect voice, Hz values typically agree within 1–3 Hz.
+Where both detect voice, Hz values typically agree within 1-3 Hz.

@@ -1,11 +1,10 @@
-# Intonavio — Development Workflow
+# IntonavioLocal — Development Workflow
 
-## Git & GitHub Conventions
+## Git Conventions
 
 ### Repository
 
-- Remote: GitHub (`github.com/pawelgawliczek/intonavio`)
-- Default branch: `main` — squash merge only, auto-delete branches on merge. Branch protection rules (required CI checks) pending GitHub Pro upgrade for private repos.
+- Default branch: `main`
 - Branch naming: `feat/description`, `fix/description`, `spike/description`
 
 ### Commits
@@ -17,44 +16,152 @@
 
 - All changes go through PRs — no direct pushes to `main`.
 - PR descriptions must include what changed and how to test it.
-- Require passing CI (lint + test) before merge.
 - Squash merge to `main` for clean history.
 
-### GitHub Issues & Projects
+---
 
-- Use GitHub Issues for all task tracking (features, bugs, spikes).
-- Label issues: `feature`, `bug`, `spike`, `chore`, `docs`.
-- Use GitHub Projects board with columns: Backlog → In Progress → Review → Done.
-- Reference issues in commits and PRs: `Fixes #123`, `Part of #45`.
+## Project Setup
 
-## CI/CD (GitHub Actions)
+### Prerequisites
 
-For deployment infrastructure details, see `docs/08-infrastructure.md`.
+| Tool      | Install                    | Purpose                |
+| --------- | -------------------------- | ---------------------- |
+| Xcode     | Mac App Store              | IDE, build, test       |
+| XcodeGen  | `brew install xcodegen`    | Project generation     |
+| SwiftLint | `brew install swiftlint`   | Code quality           |
 
-### CI workflow (`ci.yml`) — runs on every PR
+### First-Time Setup
 
-1. Install dependencies (`pnpm install`)
-2. Lint all packages (`pnpm lint`)
-3. Run unit + integration tests (`pnpm test`)
-4. Check test coverage thresholds
-5. Build all packages (`pnpm build`)
-6. Build Docker images (verify they build)
+```bash
+# Clone the repository
+git clone <repo-url>
+cd IntonavioLocal
 
-### Deploy workflow (`deploy.yml`) — runs on merge to `main`
+# Generate Xcode project
+cd apps/ios
+xcodegen generate
 
-Currently builds API and worker (web not yet implemented):
+# Open in Xcode
+open IntonavioLocal.xcodeproj
+```
 
-1. Build Docker images for `api` and `worker`, push to GitHub Container Registry (ghcr.io)
-2. SSH into production server
-3. Pull latest images and restart containers
-4. Run database migrations (`prisma migrate deploy`)
-5. Health check verification (`GET /v1/health`)
-6. Verify worker heartbeat in logs
+Select the `IntonavioLocal` scheme and `iPhone 17 Pro` simulator, then build and run.
 
-Note: GHCR auth on the server requires a PAT with `read:packages` scope.
+---
 
-### Backup workflow (`backup.yml`) — scheduled daily
+## Daily Development Workflow
 
-1. `pg_dump` PostgreSQL to compressed file
-2. Upload to Cloudflare R2 backup bucket
-3. Retain last 30 backups, delete older
+### 1. Pull latest changes
+
+```bash
+git checkout main
+git pull
+```
+
+### 2. Regenerate project (if project.yml changed)
+
+```bash
+cd apps/ios
+xcodegen generate
+```
+
+### 3. Create feature branch
+
+```bash
+git checkout -b feat/description
+```
+
+### 4. Build and test
+
+Build from Xcode or command line:
+
+```bash
+# Build iOS
+xcodebuild -project apps/ios/IntonavioLocal.xcodeproj \
+  -scheme IntonavioLocal \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  build
+
+# Run tests
+xcodebuild -project apps/ios/IntonavioLocal.xcodeproj \
+  -scheme IntonavioLocalTests \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  test
+```
+
+### 5. Verify lint
+
+SwiftLint runs as an Xcode build phase. Ensure zero warnings (warnings are errors).
+
+### 6. Commit and push
+
+```bash
+git add -A
+git commit -m "Add description of change"
+git push -u origin feat/description
+```
+
+### 7. Create PR and merge
+
+---
+
+## Adding New Files
+
+When adding or removing source files:
+
+1. Create/delete the file in the `Intonavio/` directory
+2. Regenerate the project: `xcodegen generate`
+3. Open the regenerated `.xcodeproj` in Xcode
+
+XcodeGen automatically includes all `.swift` files under the `Intonavio/` source directory. No manual file reference management needed.
+
+---
+
+## Adding a New Feature Module
+
+1. Create a new directory under `Intonavio/Features/{ModuleName}/`
+2. Add views, view models, and any module-specific types
+3. Regenerate: `xcodegen generate`
+4. Wire navigation from `ContentView` or parent views
+
+Follow the architecture rules in `docs/02-architecture.md`:
+
+- Views -> ViewModels -> Services -> Data
+- ViewModels use `@Observable` macro
+- Max 300 lines per file, 150 lines per View, 40 lines per function
+
+---
+
+## Building for macOS
+
+```bash
+xcodebuild -project apps/ios/IntonavioLocal.xcodeproj \
+  -scheme IntonavioLocalMac \
+  build
+```
+
+The macOS target shares the same source code with `#if os(iOS)` / `#if os(macOS)` conditionals where platform-specific behavior is needed (e.g., audio input device selection, navigation style).
+
+---
+
+## Debugging Tips
+
+- **Console.app**: Filter by `com.intonaviolocal` subsystem to see all app logs
+- **SwiftData SQL debug**: Add `-com.apple.CoreData.SQLDebug 1` to scheme launch arguments
+- **Audio debugging**: Use Xcode Instruments (Time Profiler, Audio) to profile audio thread performance
+- **Developer Tools**: In DEBUG builds, Settings -> Developer Tools provides diagnostic views
+
+See `docs/13-observability.md` for detailed debugging guidance.
+
+---
+
+## Code Quality Checklist (Before PR)
+
+- [ ] SwiftLint passes with zero warnings
+- [ ] All files under 300 lines
+- [ ] All functions under 40 lines
+- [ ] All Views under 150 lines
+- [ ] No `print()` — use `AppLogger`
+- [ ] No hardcoded values — use constants or configuration
+- [ ] Unit tests for any new algorithmic code
+- [ ] SwiftUI previews for any new views

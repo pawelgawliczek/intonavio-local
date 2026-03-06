@@ -1,441 +1,301 @@
-# Intonavio — Data Models
+# IntonavioLocal — Data Models
 
 ## Entity Relationship Diagram
 
 ```mermaid
 erDiagram
-    USER ||--o{ AUTH_PROVIDER : "authenticates via"
-    USER ||--o{ SONG : "submits"
-    USER ||--o{ USER_SONG_LIBRARY : "has in library"
-    SONG ||--o{ USER_SONG_LIBRARY : "shared via"
-    USER ||--o{ SESSION : "records"
     SONG ||--o{ STEM : "has"
-    SONG ||--o| PITCH_DATA : "has"
     SONG ||--o{ SESSION : "practiced in"
-    USER ||--o{ EXERCISE_ATTEMPT : "records"
-    EXERCISE ||--o{ EXERCISE_ATTEMPT : "attempted in"
-    EXERCISE ||--o| PITCH_DATA : "has"
-
-    AUTH_PROVIDER {
-        string id PK "CUID"
-        string userId FK
-        string provider "APPLE GOOGLE EMAIL"
-        string providerId "external sub or email"
-        string passwordHash "nullable, EMAIL only"
-        datetime createdAt
-    }
-
-    EXERCISE {
-        string id PK "CUID"
-        string name
-        string category "scales arpeggios intervals etc"
-        string key "C D E etc"
-        int startOctave "e.g. 3"
-        float tempo "BPM"
-        json notes "note sequence definition"
-        string pitchDataId FK "pre-generated reference"
-        datetime createdAt
-    }
-
-    EXERCISE_ATTEMPT {
-        string id PK "CUID"
-        string userId FK
-        string exerciseId FK
-        float speed "playback speed"
-        float overallScore "0 to 100"
-        json pitchLog "timestamped pitch array"
-        datetime createdAt
-    }
-
-    USER {
-        string id PK "CUID"
-        string email "nullable unique"
-        string displayName
-        datetime createdAt
-        datetime updatedAt
-    }
-
-    USER_SONG_LIBRARY {
-        string id PK "CUID"
-        string userId FK
-        string songId FK
-        datetime addedAt
-    }
+    SONG ||--o{ SCORE_RECORD : "tracked by"
 
     SONG {
-        string id PK "CUID"
-        string userId FK "original submitter"
+        string id PK "UUID"
         string videoId UK "YouTube video ID"
         string title
-        string artist "nullable, from YouTube oEmbed"
+        string artist "nullable"
         string thumbnailUrl
         int duration "seconds"
-        string status "SongStatus enum"
-        string externalJobId "StemSplit job ID"
+        string statusRaw "SongStatus enum"
+        string externalJobId "StemSplit job ID, nullable"
         string errorMessage "nullable"
-        datetime createdAt
-        datetime updatedAt
+        date createdAt
     }
 
     STEM {
-        string id PK "CUID"
-        string songId FK
-        string type "StemType enum"
-        string storageKey "R2 object key"
-        string format "mp3 wav flac"
+        string id PK "UUID"
+        string typeRaw "StemType enum"
+        string localPath "relative path in Documents"
+        string format "mp3"
         int fileSize "bytes"
-        datetime createdAt
-    }
-
-    PITCH_DATA {
-        string id PK "CUID"
-        string songId FK "nullable unique"
-        string exerciseId FK "nullable unique"
-        string storageKey "R2 object key"
-        int frameCount "number of pitch frames"
-        float hopDuration "seconds per frame"
-        datetime createdAt
     }
 
     SESSION {
-        string id PK "CUID"
-        string userId FK
-        string songId FK
+        string id PK "UUID"
         int duration "seconds practiced"
-        float loopStart "nullable"
-        float loopEnd "nullable"
-        float speed "playback speed"
-        float overallScore "0 to 100"
-        json pitchLog "timestamped pitch array"
-        datetime createdAt
+        double loopStart "nullable"
+        double loopEnd "nullable"
+        double speed "playback speed"
+        double overallScore "0 to 100"
+        data pitchLog "JSON-encoded PitchLogEntry array"
+        date createdAt
+    }
+
+    SCORE_RECORD {
+        string songId
+        int phraseIndex "nullable, nil = song-level"
+        double score "0 to 100"
+        int difficulty "DifficultyLevel raw value"
+        date date
     }
 ```
 
 ---
 
-## Prisma Schema
+## SwiftData Models
 
-```prisma
-generator client {
-  provider = "prisma-client-js"
-}
+### SongModel
 
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
+Represents a song in the user's library. Tracks processing status and links to stems and sessions.
 
-// ─── Enums ───────────────────────────────────────────
+```swift
+@Model
+final class SongModel {
+    @Attribute(.unique) var id: String          // UUID string
+    @Attribute(.unique) var videoId: String      // YouTube video ID
+    var title: String                            // From YouTube oEmbed
+    var artist: String?                          // author_name from oEmbed
+    var thumbnailUrl: String                     // Best available thumbnail
+    var duration: Int                            // Seconds (from StemSplit)
+    var statusRaw: String                        // SongStatus raw value
+    var externalJobId: String?                   // StemSplit job ID
+    var errorMessage: String?                    // Error description if FAILED
+    var createdAt: Date
 
-enum AuthProviderType {
-  APPLE
-  GOOGLE
-  EMAIL
-}
+    @Relationship(deleteRule: .cascade, inverse: \StemModel.song)
+    var stems: [StemModel] = []
 
-enum SongStatus {
-  QUEUED
-  DOWNLOADING
-  SPLITTING
-  ANALYZING
-  READY
-  FAILED
-}
+    @Relationship(deleteRule: .cascade, inverse: \SessionModel.song)
+    var sessions: [SessionModel] = []
 
-enum ExerciseCategory {
-  SCALES
-  ARPEGGIOS
-  INTERVALS
-  SUSTAINED
-  VIBRATO
-  CUSTOM
-}
+    // Computed: SongStatus enum accessor
+    var status: SongStatus { get set }
 
-enum StemType {
-  VOCALS
-  DRUMS
-  BASS
-  OTHER
-  PIANO
-  GUITAR
-  FULL
-}
-
-// ─── Models ──────────────────────────────────────────
-
-model User {
-  id          String   @id @default(cuid())
-  email       String?  @unique
-  displayName String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  authProviders    AuthProvider[]
-  songs            Song[]
-  sessions         Session[]
-  exerciseAttempts ExerciseAttempt[]
-  userSongLibrary  UserSongLibrary[]
-}
-
-model AuthProvider {
-  id           String           @id @default(cuid())
-  userId       String
-  provider     AuthProviderType
-  providerId   String           // Apple sub, Google sub, or email address
-  passwordHash String?          // Only for EMAIL provider (bcrypt)
-  createdAt    DateTime         @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerId])
-  @@index([userId])
-}
-
-model Song {
-  id            String     @id @default(cuid())
-  userId        String     // Original submitter (who triggered processing)
-  videoId       String     @unique
-  title         String     // Fetched from YouTube oEmbed API at creation
-  artist        String?    // Author name from YouTube oEmbed API
-  thumbnailUrl  String     // Best available thumbnail (maxresdefault → hqdefault → mqdefault fallback)
-  duration      Int        // seconds
-  status        SongStatus @default(QUEUED)
-  externalJobId String?    // StemSplit job ID
-  errorMessage  String?
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
-
-  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  stems           Stem[]
-  pitchData       PitchData?
-  sessions        Session[]
-  userSongLibrary UserSongLibrary[]
-
-  @@index([userId])
-  @@index([status])
-}
-
-// Join table: tracks which users have a song in their library.
-// Enables "process once, serve many" — multiple users share the same processed song.
-model UserSongLibrary {
-  id     String   @id @default(cuid())
-  userId String
-  songId String
-  addedAt DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  song Song @relation(fields: [songId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, songId])
-  @@index([userId])
-  @@index([songId])
-}
-
-model Stem {
-  id         String   @id @default(cuid())
-  songId     String
-  type       StemType
-  storageKey String   // R2 object key: "stems/{songId}/{TYPE}.mp3"
-  format     String   @default("mp3")
-  fileSize   Int      // bytes
-  createdAt  DateTime @default(now())
-
-  song Song @relation(fields: [songId], references: [id], onDelete: Cascade)
-
-  @@unique([songId, type])
-}
-
-model PitchData {
-  id          String   @id @default(cuid())
-  songId      String?  @unique
-  exerciseId  String?  @unique
-  storageKey  String   // R2 object key: "pitch/{songId|exerciseId}/reference.json"
-  frameCount  Int
-  hopDuration Float    // seconds per frame (e.g., 0.01 for 10ms hops)
-  createdAt   DateTime @default(now())
-
-  song     Song?     @relation(fields: [songId], references: [id], onDelete: Cascade)
-  exercise Exercise? @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  userId       String
-  songId       String
-  duration     Int      // seconds
-  loopStart    Float?   // seconds
-  loopEnd      Float?   // seconds
-  speed        Float    @default(1.0)
-  overallScore Float    // 0-100
-  pitchLog     Json     // [{time, detectedHz, referenceHz, cents}]
-  createdAt    DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  song Song @relation(fields: [songId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([songId])
-  @@index([createdAt])
-}
-
-model Exercise {
-  id          String           @id @default(cuid())
-  name        String           // "Major Scale Ascending"
-  category    ExerciseCategory
-  key         String           // "C", "D", "Eb", etc.
-  startOctave Int              @default(4)
-  tempo       Float            @default(60.0) // BPM
-  notes       Json             // [{midi, duration, rest, vibrato?}]
-  createdAt   DateTime         @default(now())
-
-  pitchData PitchData?
-  attempts  ExerciseAttempt[]
-
-  @@unique([name, key, startOctave])
-}
-
-model ExerciseAttempt {
-  id           String   @id @default(cuid())
-  userId       String
-  exerciseId   String
-  speed        Float    @default(1.0)
-  overallScore Float    // 0-100
-  pitchLog     Json     // [{time, detectedHz, referenceHz, cents}]
-  createdAt    DateTime @default(now())
-
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  exercise Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([exerciseId])
-  @@index([createdAt])
+    // Computed: checks Documents/pitch/{id}/reference.json exists
+    var hasPitchData: Bool { get }
 }
 ```
+
+**Notes:**
+- `statusRaw` stores the enum as a string because SwiftData `@Model` does not natively support custom enums. The computed `status` property provides type-safe access.
+- `hasPitchData` checks the file system directly because pitch data is stored as a JSON file, not in SwiftData.
+- Cascade delete on stems and sessions ensures cleanup when a song is removed.
+
+### StemModel
+
+Represents a single audio stem file stored on disk.
+
+```swift
+@Model
+final class StemModel {
+    @Attribute(.unique) var id: String      // UUID string
+    var typeRaw: String                      // StemType raw value
+    var localPath: String                    // Relative path: "stems/{songId}/{type}.mp3"
+    var format: String                       // "mp3"
+    var fileSize: Int                        // Bytes
+
+    var song: SongModel?                     // Inverse relationship
+
+    // Computed: StemType enum accessor
+    var type: StemType { get set }
+}
+```
+
+**Notes:**
+- `localPath` is relative to the Documents directory. The full URL is resolved by `LocalStorageService`.
+- File naming convention: `stems/{songId}/{stemtype}.mp3` (lowercase stem type).
+
+### SessionModel
+
+Represents a completed practice session.
+
+```swift
+@Model
+final class SessionModel {
+    @Attribute(.unique) var id: String      // UUID string
+    var duration: Int                         // Seconds practiced
+    var loopStart: Double?                   // Loop start time in seconds
+    var loopEnd: Double?                     // Loop end time in seconds
+    var speed: Double                        // Playback speed (0.25-2.0)
+    var overallScore: Double                 // 0-100
+    var pitchLog: Data?                      // JSON-encoded [PitchLogEntry]
+    var createdAt: Date
+
+    var song: SongModel?                     // Inverse relationship
+
+    // Computed: decodes pitchLog Data to [PitchLogEntry]
+    var decodedPitchLog: [PitchLogEntry] { get }
+}
+```
+
+**Notes:**
+- `pitchLog` is stored as `Data` (JSON-encoded) because SwiftData does not support arrays of custom structs as stored properties. The `decodedPitchLog` computed property handles deserialization.
+- Sessions are cascade-deleted when their parent song is removed.
+
+### ScoreRecord
+
+Tracks per-song and per-phrase best scores across difficulty levels.
+
+```swift
+@Model
+final class ScoreRecord {
+    var songId: String                       // References SongModel.id
+    var phraseIndex: Int?                    // nil = song-level score
+    var score: Double                        // 0-100
+    var date: Date
+    var difficulty: Int                      // DifficultyLevel raw value (0/1/2)
+}
+```
+
+**Notes:**
+- Not linked via SwiftData `@Relationship` to SongModel — uses `songId` string reference to avoid circular dependency issues.
+- `ScoreRepository` manages all CRUD operations and personal best lookups.
+- `phraseIndex` of `nil` represents the overall song score; an integer value represents a specific phrase.
 
 ---
 
 ## Enum Definitions
 
-### AuthProviderType
-
-| Value    | Description                      |
-| -------- | -------------------------------- |
-| `APPLE`  | Apple Sign In (iOS, macOS, Web)  |
-| `GOOGLE` | Google OAuth 2.0                 |
-| `EMAIL`  | Email + password (bcrypt hashed) |
-
-A user can have multiple auth providers linked (e.g., sign up with email, later link Google). The `@@unique([provider, providerId])` constraint prevents duplicate provider entries.
-
 ### SongStatus
 
-| Value         | Description                              |
-| ------------- | ---------------------------------------- |
-| `QUEUED`      | Song submitted, waiting for processing   |
-| `DOWNLOADING` | YouTube audio being fetched by StemSplit |
-| `SPLITTING`   | StemSplit is separating stems            |
-| `ANALYZING`   | Python worker extracting reference pitch |
-| `READY`       | Stems and pitch data available           |
-| `FAILED`      | Processing failed (see `errorMessage`)   |
+| Value         | Description                                  |
+| ------------- | -------------------------------------------- |
+| `QUEUED`      | Song submitted, waiting for processing       |
+| `DOWNLOADING` | Stems being downloaded from StemSplit URLs   |
+| `SPLITTING`   | StemSplit API is separating stems            |
+| `ANALYZING`   | On-device YIN pitch extraction in progress   |
+| `READY`       | Stems and pitch data available for practice  |
+| `FAILED`      | Processing failed (see `errorMessage`)       |
 
-### StemType
+```swift
+enum SongStatus: String, Codable, Sendable {
+    case queued = "QUEUED"
+    case downloading = "DOWNLOADING"
+    case splitting = "SPLITTING"
+    case analyzing = "ANALYZING"
+    case ready = "READY"
+    case failed = "FAILED"
 
-| Value    | Description                                            |
-| -------- | ------------------------------------------------------ |
-| `VOCALS` | Isolated vocal track                                   |
-| `DRUMS`  | Isolated percussion                                    |
-| `BASS`   | Isolated bass line                                     |
-| `OTHER`  | Remaining instruments (synths, strings)                |
-| `PIANO`  | Isolated piano/keys track                              |
-| `GUITAR` | Isolated guitar track                                  |
-| `FULL`   | Full audio mix from StemSplit (replaces YouTube audio) |
-
-### ExerciseCategory
-
-| Value       | Description                                        |
-| ----------- | -------------------------------------------------- |
-| `SCALES`    | Major, minor, chromatic, pentatonic scales         |
-| `ARPEGGIOS` | Broken chords ascending and descending             |
-| `INTERVALS` | Two-note jumps (thirds, fifths, octaves)           |
-| `SUSTAINED` | Hold a single pitch for duration                   |
-| `VIBRATO`   | Sustained notes with intentional pitch oscillation |
-| `CUSTOM`    | User-defined or imported exercises                 |
-
----
-
-## Exercise Note Definition Format
-
-The `notes` JSON field on the Exercise model defines the sequence of pitches the singer should produce. A generator expands this into the same frame-by-frame pitch data JSON used by songs.
-
-```json
-{
-  "name": "Major Scale Ascending",
-  "category": "SCALES",
-  "key": "C",
-  "startOctave": 4,
-  "tempo": 80,
-  "notes": [
-    { "midi": 60, "duration": 1.0, "rest": 0.25 },
-    { "midi": 62, "duration": 1.0, "rest": 0.25 },
-    { "midi": 64, "duration": 1.0, "rest": 0.25 },
-    { "midi": 65, "duration": 1.0, "rest": 0.25 },
-    { "midi": 67, "duration": 1.0, "rest": 0.25 },
-    { "midi": 69, "duration": 1.0, "rest": 0.25 },
-    { "midi": 71, "duration": 1.0, "rest": 0.25 },
-    { "midi": 72, "duration": 1.0, "rest": 0.0 }
-  ]
+    var isProcessing: Bool { ... }
 }
 ```
 
-**With vibrato embellishment:**
+### StemType
 
-```json
-{ "midi": 67, "duration": 2.0, "rest": 0.5, "vibrato": { "cents": 30, "rateHz": 5.5 } }
+| Value            | Description                                              |
+| ---------------- | -------------------------------------------------------- |
+| `VOCALS`         | Isolated vocal track                                     |
+| `INSTRUMENTAL`   | Isolated instrumental mix                                |
+| `DRUMS`          | Isolated percussion                                      |
+| `BASS`           | Isolated bass line                                       |
+| `OTHER`          | Remaining instruments (synths, strings)                  |
+| `PIANO`          | Isolated piano/keys track                                |
+| `GUITAR`         | Isolated guitar track                                    |
+| `FULL`           | Full audio mix from StemSplit                            |
+
+```swift
+enum StemType: String, Codable, Sendable {
+    case vocals = "VOCALS"
+    case instrumental = "INSTRUMENTAL"
+    case drums = "DRUMS"
+    case bass = "BASS"
+    case other = "OTHER"
+    case piano = "PIANO"
+    case guitar = "GUITAR"
+    case full = "FULL"
+}
 ```
 
-| Field            | Type      | Description                                       |
-| ---------------- | --------- | ------------------------------------------------- |
-| `midi`           | `int`     | MIDI note number (60 = C4)                        |
-| `duration`       | `float`   | Note duration in beats (scaled by tempo)          |
-| `rest`           | `float`   | Rest after note in beats                          |
-| `vibrato`        | `object?` | Optional vibrato modulation                       |
-| `vibrato.cents`  | `float`   | Vibrato depth (±cents from center pitch)          |
-| `vibrato.rateHz` | `float`   | Vibrato oscillation rate in Hz (typically 4–7 Hz) |
+### PitchLogEntry
 
-The generator converts this definition into the standard `{t, hz, midi, voiced, rms}` frame array at 11.6ms hop intervals. Vibrato is rendered as a sine modulation: `hz = baseHz × 2^(cents × sin(2π × rateHz × t) / 1200)`. Rest periods produce unvoiced frames.
+Timestamped pitch detection result stored in session pitch logs.
+
+```swift
+struct PitchLogEntry: Codable, Sendable {
+    let time: Double          // Seconds from session start
+    let detectedHz: Double?   // Detected frequency (nil if unvoiced)
+    let referenceHz: Double?  // Reference frequency at this time
+    let cents: Double?        // Cents deviation from reference
+}
+```
+
+---
+
+## File Storage Layout
+
+Audio files and pitch data are stored in the app's Documents directory:
+
+```
+Documents/
+├── stems/
+│   ├── {songId}/
+│   │   ├── vocals.mp3
+│   │   ├── instrumental.mp3
+│   │   ├── drums.mp3
+│   │   ├── bass.mp3
+│   │   ├── piano.mp3
+│   │   ├── guitar.mp3
+│   │   └── other.mp3
+│   └── {songId}/
+│       └── ...
+└── pitch/
+    ├── {songId}/
+    │   └── reference.json
+    └── {songId}/
+        └── reference.json
+```
+
+`LocalStorageService` provides path resolution and directory management for all file operations.
 
 ---
 
 ## Pitch Data JSON Format
 
-The pitch data file stored in R2 contains frame-by-frame pitch information. For songs, this is extracted by the Python worker using pYIN. For exercises, it is generated deterministically from the exercise note definition.
+The pitch data file contains frame-by-frame pitch information extracted on-device by the YIN algorithm.
 
-**File location:** `pitch/{songId}/reference.json`
+**File location:** `Documents/pitch/{songId}/reference.json`
 
 ```json
 {
-  "songId": "cm7abc123def456ghijklmnop",
+  "songId": null,
   "sampleRate": 44100,
+  "hopSize": 512,
+  "frameCount": 18432,
   "hopDuration": 0.0116,
   "frames": [
     { "t": 0.0, "hz": null, "midi": null, "voiced": false, "rms": 0.0001 },
     { "t": 0.0116, "hz": null, "midi": null, "voiced": false, "rms": 0.0002 },
     { "t": 0.5104, "hz": 329.63, "midi": 64.0, "voiced": true, "rms": 0.15 },
     { "t": 0.522, "hz": 330.12, "midi": 64.1, "voiced": true, "rms": 0.14 }
+  ],
+  "phrases": [
+    { "index": 0, "startFrame": 44, "endFrame": 172, "startTime": 0.5104, "endTime": 1.9952, "voicedFrameCount": 118 }
   ]
 }
 ```
 
-| Field    | Type     | Description                                                            |
-| -------- | -------- | ---------------------------------------------------------------------- |
-| `t`      | `float`  | Time in seconds from start of track (4 decimal places)                 |
-| `hz`     | `float?` | Detected frequency in Hz (`null` if unvoiced)                          |
-| `midi`   | `float?` | MIDI note number, 1 decimal place (`null` if unvoiced)                 |
-| `voiced` | `bool`   | Whether a pitched vocal was detected at this frame                     |
-| `rms`    | `float?` | Per-frame RMS energy from `librosa.feature.rms()` (artifact filtering) |
+| Field    | Type     | Description                                                        |
+| -------- | -------- | ------------------------------------------------------------------ |
+| `t`      | `float`  | Time in seconds from start of track (4 decimal places)             |
+| `hz`     | `float?` | Detected frequency in Hz (`null` if unvoiced)                      |
+| `midi`   | `float?` | MIDI note number, 1 decimal place (`null` if unvoiced)             |
+| `voiced` | `bool`   | Whether a pitched vocal was detected at this frame                 |
+| `rms`    | `float?` | Per-frame RMS energy via vDSP_rmsqv (artifact filtering)          |
+
+**Phrase data** is also included, with detected vocal phrases (contiguous voiced regions with gaps < 0.3s merged).
 
 **Design notes:**
 
-- Hop size of 512 samples at 44.1kHz gives ~11.6ms resolution — sufficient for note-level comparison
-- Unvoiced frames (breaths, silence, consonants) are explicitly marked so the client can skip them during scoring
-- MIDI note numbers simplify note-level bucketing on the client (e.g., "you sang E4 instead of F4")
-- `rms` enables filtering of low-energy artifacts from imperfect stem separation. Frames with `rms < 0.02` are treated as inaudible on the client (excluded from rendering and MIDI range computation). The threshold filters residual noise that pYIN marks as "voiced" but is not real vocal signal.
+- Hop size of 512 samples at 44.1kHz gives ~11.6ms resolution
+- Unvoiced frames are explicitly marked so the client can skip them during scoring
+- MIDI note numbers simplify note-level bucketing (e.g., "you sang E4 instead of F4")
+- `rms` enables filtering of low-energy artifacts from imperfect stem separation. Frames with `rms < 0.02` are treated as inaudible

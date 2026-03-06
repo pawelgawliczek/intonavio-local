@@ -19,9 +19,9 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Intonavio uses a local server to load the YouTube player.</string>
+	<string>IntonavioLocal uses a local server to load the YouTube player.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Intonavio needs microphone access to detect your singing pitch in real-time.</string>
+	<string>IntonavioLocal needs microphone access to detect your singing pitch in real-time.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

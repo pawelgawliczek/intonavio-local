@@ -1,36 +1,39 @@
-# Intonavio — Audio Processing Pipeline
+# IntonavioLocal — Audio Processing Pipeline
 
 ## Processing Pipeline Overview
 
-End-to-end flow from YouTube URL submission to practice-ready song.
+End-to-end flow from YouTube URL submission to practice-ready song. All processing is orchestrated by `SongProcessingService` as a single async Swift Task.
 
 ```mermaid
 flowchart TD
-    A[Client submits YouTube URL] --> B{Song exists in DB?}
-    B -->|Yes, status READY| C[Return existing song + stems]
-    B -->|Yes, status processing| D[Return current status]
-    B -->|No| E[Create song record<br/>status: QUEUED]
+    A[User pastes YouTube URL] --> B{Song exists in SwiftData?}
+    B -->|Yes, status READY| C[Show error: duplicate song]
+    B -->|Yes, status FAILED| D[Reset to QUEUED<br/>Re-run pipeline]
+    B -->|No| E[Fetch YouTube oEmbed metadata]
 
-    E --> F[Enqueue StemSplit job]
+    E --> F[Create SongModel in SwiftData<br/>status: QUEUED]
     F --> G[POST /api/v1/youtube-jobs<br/>to StemSplit API]
-    G --> H[StemSplit processes<br/>1-5 minutes]
+    G --> H[Update status: SPLITTING]
 
-    H --> I{StemSplit webhook<br/>status?}
-    I -->|Success| J[Download stems from<br/>StemSplit URLs]
-    I -->|Failed| K[Update song<br/>status: FAILED]
+    H --> I[Poll job status<br/>every 15s, max 10 min]
+    I --> J{StemSplit job status?}
 
-    J --> L[Upload stems to<br/>Cloudflare R2]
-    L --> M[Create Stem records in DB]
-    M --> N[Update song<br/>status: ANALYZING]
+    J -->|COMPLETED| K[Update status: DOWNLOADING]
+    J -->|FAILED| L[Update status: FAILED<br/>Set errorMessage]
+    J -->|Timeout| L
 
-    N --> O[Enqueue pitch<br/>analysis job]
-    O --> P[Python worker<br/>downloads vocal stem]
-    P --> Q[pYIN pitch extraction<br/>via librosa]
-    Q --> R[Upload pitch JSON<br/>to R2]
-    R --> S[Create PitchData record]
-    S --> T[Update song<br/>status: READY]
+    K --> M[Download stems in parallel<br/>from presigned URLs]
+    M --> N[Save stems to<br/>Documents/stems/songId/]
+    N --> O[Create StemModel records<br/>in SwiftData]
 
-    T --> U[Song available<br/>for practice]
+    O --> P[Update status: ANALYZING]
+    P --> Q[Load vocal stem audio<br/>AVAudioFile + AVAudioConverter]
+    Q --> R[On-device YIN pitch extraction<br/>Accelerate/vDSP]
+    R --> S[Detect phrases<br/>contiguous voiced regions]
+    S --> T[Save pitch JSON to<br/>Documents/pitch/songId/reference.json]
+
+    T --> U[Update status: READY]
+    U --> V[Song available<br/>for practice]
 ```
 
 ## Job State Machine
@@ -41,116 +44,58 @@ States a song goes through during processing.
 stateDiagram-v2
     [*] --> QUEUED: Song submitted
 
-    QUEUED --> DOWNLOADING: StemSplit job created
-    DOWNLOADING --> SPLITTING: Audio downloaded
-    SPLITTING --> ANALYZING: Stems separated & uploaded
+    QUEUED --> SPLITTING: StemSplit job created
+    SPLITTING --> DOWNLOADING: Job completed, downloading stems
+    DOWNLOADING --> ANALYZING: Stems saved to disk
     ANALYZING --> READY: Pitch data extracted
+
     READY --> [*]
 
-    QUEUED --> FAILED: Job creation error
-    DOWNLOADING --> FAILED: Download error
-    SPLITTING --> FAILED: Separation error
+    QUEUED --> FAILED: Metadata fetch error
+    SPLITTING --> FAILED: StemSplit job error or timeout
+    DOWNLOADING --> FAILED: Stem download error
     ANALYZING --> FAILED: Pitch extraction error
 
-    FAILED --> QUEUED: Manual retry
+    FAILED --> QUEUED: User taps retry
 ```
 
-## Cache Hit vs Cache Miss
+## Song Deduplication
 
-Song deduplication avoids redundant processing when multiple users submit the same YouTube video.
+Songs are deduplicated by YouTube `videoId` in SwiftData. If a user submits a URL for a song that already exists:
 
-```mermaid
-flowchart TD
-    A[POST /songs with youtubeUrl] --> B[Extract videoId<br/>from URL]
-    B --> C{Song with videoId<br/>exists in DB?}
-
-    C -->|Cache Hit| D{Song status?}
-    D -->|READY| E[Add song to user's library<br/>Return stems + pitch data]
-    D -->|FAILED| F[Reset status to QUEUED<br/>Re-enqueue processing]
-    D -->|Processing| G[Return current status<br/>Client polls for updates]
-
-    C -->|Cache Miss| H[Fetch YouTube oEmbed metadata<br/>title, artist, thumbnail]
-    H --> I[Create new Song record]
-    I --> J[Enqueue StemSplit job]
-    J --> K[Return 202 with<br/>status: QUEUED]
-```
+- **Status READY**: the submission is rejected with "already in your library"
+- **Status FAILED**: the song is reset to QUEUED and reprocessed
+- **Status processing**: the submission is rejected as duplicate
 
 ---
 
 ## StemSplit API Integration
 
-StemSplit offers two flows: **YouTube jobs** (direct URL, 2-stem output) and **file upload jobs** (supports up to 6-stem separation). Intonavio uses the YouTube flow for simplicity.
+The app calls the StemSplit API directly via `StemSplitService` using URLSession. No backend proxy.
 
 ### Job Creation
 
 ```
-POST https://stemsplit.io/api/v1/youtube-jobs
-Authorization: Bearer <STEMSPLIT_API_KEY>
-Content-Type: application/json
-
-{
-  "youtubeUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "outputFormat": "MP3",
-  "quality": "BEST"
-}
+POST https://api.stemsplit.com/api/v1/youtube-jobs
+Authorization: Bearer <user's API key from Keychain>
 ```
 
-Note: The YouTube endpoint does **not** accept `outputType` or `webhookUrl`. Webhooks are registered separately via `POST /api/v1/webhooks`. YouTube jobs always produce vocals + instrumental + fullAudio.
+Body: `{ youtubeUrl, outputType: "SIX_STEMS", outputFormat: "MP3", quality: "BEST" }`
 
-### Output Types by Flow
+Returns `{ id: "..." }` — stored as `song.externalJobId`.
 
-| Flow         | Endpoint        | Available Output Types                      | Stems Produced                                            |
-| ------------ | --------------- | ------------------------------------------- | --------------------------------------------------------- |
-| YouTube jobs | `/youtube-jobs` | Fixed (vocals + instrumental + fullAudio)   | 3 outputs (2 useful stems)                                |
-| File upload  | `/jobs`         | `VOCALS`, `BOTH`, `FOUR_STEMS`, `SIX_STEMS` | Up to 6 stems (vocals, drums, bass, other, piano, guitar) |
+### Job Polling
 
-### Webhook Registration
-
-Webhooks are registered once via the StemSplit dashboard or API (`POST /api/v1/webhooks`), not per-job. StemSplit sends events for all jobs to the registered URL.
-
-### Webhook Payload
-
-StemSplit uses HMAC-SHA256 signatures for webhook authentication via the `X-Webhook-Signature` header.
-
-```json
-{
-  "event": "job.completed",
-  "timestamp": "2026-01-05T12:30:00Z",
-  "data": {
-    "jobId": "clxxx123...",
-    "status": "COMPLETED",
-    "input": {
-      "durationSeconds": 240,
-      "fileSizeBytes": 4500000
-    },
-    "outputs": {
-      "vocals": {
-        "url": "https://stemsplit-storage....r2.cloudflarestorage.com/...",
-        "expiresAt": "2026-01-05T13:30:00Z"
-      },
-      "instrumental": {
-        "url": "https://stemsplit-storage....r2.cloudflarestorage.com/...",
-        "expiresAt": "2026-01-05T13:30:00Z"
-      },
-      "fullAudio": {
-        "url": "https://stemsplit-storage....r2.cloudflarestorage.com/...",
-        "expiresAt": "2026-01-05T13:30:00Z"
-      }
-    },
-    "creditsCharged": 240,
-    "createdAt": "2026-01-05T12:00:00Z",
-    "completedAt": "2026-01-05T12:02:30Z"
-  }
-}
+```
+GET https://api.stemsplit.com/api/v1/youtube-jobs/{jobId}
+Authorization: Bearer <user's API key>
 ```
 
-### Webhook Headers
+Polled every 15 seconds. Maximum 40 attempts (10 minutes). Returns status, outputs (presigned URLs), and duration.
 
-| Header                | Description                            |
-| --------------------- | -------------------------------------- |
-| `X-Webhook-Signature` | `sha256=<HMAC-SHA256 of request body>` |
-| `X-Webhook-Event`     | Event type (e.g., `job.completed`)     |
-| `X-Webhook-Id`        | Webhook endpoint identifier            |
+### Stem Download
+
+All stems from the `outputs` dictionary are downloaded in parallel using a `TaskGroup`. Each stem is saved to `Documents/stems/{songId}/{stemtype}.mp3`. The stem type is parsed from the output key name (e.g., "vocals" -> `.vocals`, "instrumental" -> `.instrumental`).
 
 ---
 
@@ -161,20 +106,20 @@ All audio I/O (stem playback + microphone input) runs through a single shared `A
 ### Unified Audio Graph
 
 ```
-Microphone → inputNode (VP/AEC enabled) ── tap ──→ PitchDetector ring buffer
+Microphone -> inputNode (VP/AEC enabled) -- tap --> PitchDetector ring buffer
 
-PlayerNode(vocals)  ──┐
-PlayerNode(other)   ──┼→ stemMixer → timePitch → mainMixerNode → output
-PlayerNode(full)    ──┘
+PlayerNode(vocals)  --+
+PlayerNode(other)   --+-> stemMixer -> timePitch -> mainMixerNode -> output
+PlayerNode(full)    --+
 ```
 
 ### AudioEngine Lifecycle
 
 1. **`prepare()`** — Configure audio session (`.playAndRecord`, `.measurement`) and enable voice processing on `inputNode`. Must be called before attaching nodes — VP re-creates the audio graph.
 2. **Attach nodes** — `StemPlayer.setup()` attaches player nodes, mixer, and timePitch to the prepared engine.
-3. **`start()`** — Start the engine with all nodes connected. Observes interruption and route change notifications on iOS. Idempotent — safe to call from multiple consumers.
+3. **`start()`** — Start the engine with all nodes connected. Observes interruption and route change notifications. Idempotent — safe to call from multiple consumers.
 
-`StemPlayer`, `PitchDetector`, and `MetronomeTick` all accept a shared `AudioEngine` via init. None creates its own `AVAudioEngine`. The engine starts lazily when stems are set up or pitch detection begins.
+`StemPlayer`, `PitchDetector`, and `MetronomeTick` all accept a shared `AudioEngine` via init. None creates its own `AVAudioEngine`.
 
 ### Why One Engine?
 
@@ -182,22 +127,20 @@ Previous architecture used separate engines for `StemPlayer` (output) and `Pitch
 
 ### Audio Route Change Handling
 
-When the audio output route changes (e.g. AirPods connected/disconnected), iOS posts `AVAudioSession.routeChangeNotification`. `AudioEngine` observes this and:
+When the audio output route changes (e.g., AirPods connected/disconnected), iOS posts `AVAudioSession.routeChangeNotification`. `AudioEngine` observes this and:
 
 1. Ensures the engine is still running (route changes can stop it)
 2. Fires an `onRouteChange` callback so consumers can re-sync playback
 
-`PracticeViewModel` handles the callback by stopping all stems, re-applying the current audio mode volumes, and restarting playback from the current YouTube time. Without this, player nodes lose sync during route changes and all stems become audible at slightly different offsets.
+`PracticeViewModel` handles the callback by stopping all stems, re-applying the current audio mode volumes, and restarting playback from the current YouTube time.
 
 ### TimePitch Latency Compensation
 
-`AVAudioUnitTimePitch` introduces processing latency (~125ms) — audio frames take time to pass through the pitch-preserving time-stretch pipeline. `StemPlayer.play(from:)` compensates by scheduling stems ahead by `timePitch.latency`:
+`AVAudioUnitTimePitch` introduces processing latency (~125ms). `StemPlayer.play(from:)` compensates by scheduling stems ahead by `timePitch.latency`:
 
 ```swift
 let compensated = time + timePitch.latency
 ```
-
-This ensures the audio output aligns with the requested playback time after the pipeline delay. The drift checker in `VideoAudioSync` accounts for the same latency when comparing stem position against YouTube time.
 
 ### Video-Audio Drift Correction
 
@@ -205,12 +148,10 @@ This ensures the audio output aligns with the requested playback time after the 
 
 ### Audio Session Configuration
 
-The audio session uses `.measurement` mode with voice processing enabled on the input node for AEC. All audio routes through stem playback — YouTube audio is not used.
-
 ```swift
 AVAudioSession.sharedInstance().setCategory(
     .playAndRecord,
-    mode: .measurement,  // VP enabled separately on inputNode for AEC
+    mode: .measurement,
     options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
 )
 ```
@@ -218,52 +159,65 @@ AVAudioSession.sharedInstance().setCategory(
 Additional pre-detection filtering:
 
 - **RMS noise gate**: `vDSP_rmsqv` (Accelerate) — skip YIN if RMS < 0.01 (~-40 dB)
-- **Confidence threshold**: 0.85 (above default 0.80)
+- **Confidence threshold**: 0.85
 - **MIDI jump filter**: Reject >12 semitone jumps within 50ms
 
 ---
 
-## Pitch Analysis (Python Worker)
+## On-Device Pitch Analysis (PitchAnalyzer)
 
-The Python worker extracts reference pitch data from the vocal stem using librosa's pYIN algorithm.
+Reference pitch data is extracted entirely on-device using the YIN algorithm with Accelerate/vDSP. No server-side processing.
 
 ### Pipeline
 
-1. **Download** vocal stem from R2 (`stems/{songId}/VOCALS.mp3`)
-2. **Load** audio with librosa at 44.1kHz mono
-3. **Extract pitch** using `librosa.pyin()`:
-   - `fmin=65` (C2) — lowest expected singing pitch
-   - `fmax=2093` (C7) — highest expected singing pitch
-   - `hop_length=512` — ~11.6ms resolution
-4. **Compute RMS** energy per frame using `librosa.feature.rms()` (same hop length)
-5. **Convert** frequencies to MIDI note numbers
-6. **Build** JSON frame array with `t`, `hz`, `midi`, `voiced`, `rms` fields
-7. **Upload** JSON to R2 at `pitch/{songId}/reference.json`
-8. **Update** database: create PitchData record, set song status to READY
+1. **Load** vocal stem from `Documents/stems/{songId}/vocals.mp3` using `AVAudioFile` + `AVAudioConverter` at 44.1kHz mono
+2. **Extract pitch** using `YINDetector` (5-step YIN with Accelerate vDSP):
+   - Window size: 2048 samples
+   - Hop size: 512 samples (~11.6ms)
+   - Min frequency: 65 Hz (C2), max frequency: 2093 Hz (C7)
+   - YIN threshold: from `PitchConstants.yinThreshold`
+3. **Compute RMS** energy per frame using `vDSP_rmsqv` (same window)
+4. **Convert** frequencies to MIDI note numbers
+5. **Detect phrases** — contiguous voiced regions with gaps < 0.3s merged, minimum phrase length 0.5s
+6. **Build** JSON with frames array (`t`, `hz`, `midi`, `voiced`, `rms`) and phrases array
+7. **Save** JSON to `Documents/pitch/{songId}/reference.json`
 
 ### Key Parameters
 
-| Parameter   | Value         | Rationale                                                    |
-| ----------- | ------------- | ------------------------------------------------------------ |
-| Sample rate | 44,100 Hz     | Standard audio quality                                       |
-| Hop length  | 512 samples   | ~11.6ms — matches real-time detection resolution             |
-| fmin        | 65 Hz (C2)    | Covers bass vocal range                                      |
-| fmax        | 2,093 Hz (C7) | Covers soprano vocal range                                   |
-| Algorithm   | pYIN          | More robust than YIN for pre-recorded audio; handles vibrato |
+| Parameter     | Value         | Rationale                                            |
+| ------------- | ------------- | ---------------------------------------------------- |
+| Sample rate   | 44,100 Hz     | Standard audio quality                               |
+| Window size   | 2,048 samples | YIN analysis window                                  |
+| Hop length    | 512 samples   | ~11.6ms — matches real-time detection resolution     |
+| Min frequency | 65 Hz (C2)    | Covers bass vocal range                              |
+| Max frequency | 2,093 Hz (C7) | Covers soprano vocal range                           |
+| Algorithm     | YIN           | Fast, suitable for on-device processing              |
+| RMS threshold | 0.02          | Filter low-energy artifacts from imperfect stems     |
 
 ### RMS Energy (Artifact Filtering)
 
-Per-frame RMS energy is computed alongside pitch extraction using `librosa.feature.rms(y=audio, hop_length=512)`. This value is included in the output JSON (`rms` field) and used by iOS/Web clients to filter low-energy artifacts from imperfect stem separation. Frames where `rms < 0.02` are treated as inaudible — excluded from piano roll rendering and MIDI range computation. Without this filtering, pYIN marks residual noise as "voiced" (it has detectable pitch), producing visible artifacts on the piano roll.
+Per-frame RMS energy is computed alongside pitch extraction using `vDSP_rmsqv`. Frames with `rms < 0.02` are treated as unvoiced regardless of YIN detection result. This filters residual noise from imperfect stem separation that would otherwise produce visible artifacts on the piano roll.
+
+### Phrase Detection
+
+The phrase detector identifies contiguous vocal regions in the reference pitch data:
+
+1. **Raw phrase detection**: Find contiguous sequences of active frames (voiced + RMS above threshold)
+2. **Gap merging**: Gaps shorter than 0.3 seconds within a phrase are bridged
+3. **Short phrase merging**: Phrases shorter than 0.5 seconds are merged into the nearest neighbor
+4. **Reindexing**: Final phrases are numbered sequentially with start/end times and voiced frame counts
+
+Phrases are used for per-phrase scoring during practice.
 
 ---
 
 ## Cost Optimization
 
-| Strategy               | Description                                                                      |
-| ---------------------- | -------------------------------------------------------------------------------- |
-| **Song deduplication** | Same videoId shared across users — process once, serve many                      |
-| **R2 storage**         | No egress fees for stem downloads (Cloudflare R2)                                |
-| **Lazy processing**    | Only process songs when first requested, not speculatively                       |
-| **Format choice**      | MP3 for stems (smaller files, acceptable quality for practice)                   |
-| **TTL on failed jobs** | Auto-retry failed jobs up to 3 times, then mark as FAILED                        |
-| **StemSplit pricing**  | Credits = audio duration in seconds. ~$0.10/min — a 4-min song costs ~$0.40 once |
+| Strategy               | Description                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| **Song deduplication** | Same videoId checked before creating a new StemSplit job                      |
+| **On-device pitch**    | No server costs for pitch analysis — runs locally via Accelerate             |
+| **Local storage**      | No cloud storage costs — stems and pitch data stored on device               |
+| **Lazy processing**    | Only process songs when requested by the user                                |
+| **Parallel downloads** | Stems downloaded concurrently to minimize wall time                          |
+| **StemSplit pricing**  | Credits = audio duration in seconds, charged to user's own API key           |

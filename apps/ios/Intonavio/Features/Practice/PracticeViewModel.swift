@@ -62,7 +62,7 @@ final class PracticeViewModel {
 
     let songId: String
     let videoId: String
-    var stems: [StemResponse] = []
+    var stems: [StemModel] = []
 
     // MARK: - Dependencies
 
@@ -71,9 +71,7 @@ final class PracticeViewModel {
     let server: YouTubeLocalServer
     let audioEngine = AudioEngine()
     let stemPlayer: StemPlayer
-    let stemDownloader = StemDownloader()
     private(set) var sync: VideoAudioSync?
-    let sessionsViewModel: SessionsViewModel?
 
     // Pitch dependencies
     var pitchDetector: PitchDetector?
@@ -107,14 +105,12 @@ final class PracticeViewModel {
 
     init(
         songId: String,
-        videoId: String,
-        sessionsViewModel: SessionsViewModel? = nil
+        videoId: String
     ) {
         self.songId = songId
         self.videoId = videoId
         self.server = YouTubeLocalServer(videoId: videoId)
         self.stemPlayer = StemPlayer(engine: audioEngine)
-        self.sessionsViewModel = sessionsViewModel
     }
 
     deinit {

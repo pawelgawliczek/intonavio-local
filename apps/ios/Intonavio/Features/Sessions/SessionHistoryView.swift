@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SessionHistoryView: View {
+    @Environment(\.modelContext) private var modelContext
     @State private var viewModel = SessionsViewModel()
 
     var body: some View {
@@ -12,10 +13,8 @@ struct SessionHistoryView: View {
             }
         }
         .navigationTitle("Sessions")
-        .refreshable {
-            await viewModel.loadSessions(page: 1)
-        }
         .onAppear {
+            viewModel.setModelContext(modelContext)
             if viewModel.sessions.isEmpty {
                 viewModel.fetchSessions()
             }
@@ -28,20 +27,9 @@ struct SessionHistoryView: View {
 private extension SessionHistoryView {
     var sessionList: some View {
         List {
-            ForEach(viewModel.sessions) { session in
-                NavigationLink(value: session.id) {
-                    SessionRowView(session: session)
-                }
+            ForEach(viewModel.sessions, id: \.id) { session in
+                SessionRowView(session: session)
             }
-
-            if viewModel.hasMorePages {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
-                    .onAppear { viewModel.loadMore() }
-            }
-        }
-        .navigationDestination(for: String.self) { sessionId in
-            SessionDetailView(sessionId: sessionId)
         }
     }
 

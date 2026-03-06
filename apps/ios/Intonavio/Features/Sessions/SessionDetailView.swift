@@ -1,42 +1,38 @@
+import SwiftData
 import SwiftUI
 
 struct SessionDetailView: View {
     let sessionId: String
 
-    @State private var detail: SessionDetailResponse?
-    @State private var isLoading = true
-    @State private var errorMessage: String?
-
-    private let apiClient: any APIClientProtocol
-
-    init(
-        sessionId: String,
-        apiClient: any APIClientProtocol = APIClient()
-    ) {
-        self.sessionId = sessionId
-        self.apiClient = apiClient
-    }
+    @Environment(\.modelContext) private var modelContext
+    @State private var session: SessionModel?
 
     var body: some View {
         Group {
-            if isLoading {
+            if let session {
+                sessionContent(session)
+            } else {
                 ProgressView()
-            } else if let detail {
-                sessionContent(detail)
-            } else if let error = errorMessage {
-                Text(error).foregroundStyle(.red)
             }
         }
         .navigationTitle("Session")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await loadDetail() }
+        .onAppear { loadSession() }
+    }
+
+    private func loadSession() {
+        let id = sessionId
+        let descriptor = FetchDescriptor<SessionModel>(
+            predicate: #Predicate { $0.id == id }
+        )
+        session = try? modelContext.fetch(descriptor).first
     }
 }
 
 // MARK: - Content
 
 private extension SessionDetailView {
-    func sessionContent(_ session: SessionDetailResponse) -> some View {
+    func sessionContent(_ session: SessionModel) -> some View {
         List {
             Section("Score") {
                 HStack {
@@ -53,12 +49,14 @@ private extension SessionDetailView {
                 if let start = session.loopStart, let end = session.loopEnd {
                     detailRow("Loop", "\(formatTime(start)) - \(formatTime(end))")
                 }
+                if let song = session.song {
+                    detailRow("Song", song.title)
+                }
             }
 
             Section("Pitch Graph") {
-                Text("Pitch visualization coming in Phase 5")
-                    .foregroundStyle(.secondary)
-                Text("\(session.pitchLog.count) pitch log entries")
+                let logCount = session.decodedPitchLog.count
+                Text("\(logCount) pitch log entries")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -80,23 +78,8 @@ private extension SessionDetailView {
     }
 }
 
-// MARK: - Loading
-
-private extension SessionDetailView {
-    @MainActor
-    func loadDetail() async {
-        isLoading = true
-        do {
-            detail = try await apiClient.getSession(id: sessionId)
-        } catch {
-            errorMessage = (error as? APIError)?.message ?? error.localizedDescription
-        }
-        isLoading = false
-    }
-}
-
 #Preview {
     NavigationStack {
-        SessionDetailView(sessionId: "sess1", apiClient: MockAPIClient())
+        SessionDetailView(sessionId: "sess1")
     }
 }

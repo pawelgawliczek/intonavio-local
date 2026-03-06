@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Root view with tab navigation (iOS) or sidebar navigation (macOS) and auth gate.
+/// Root view with tab navigation (iOS) or sidebar navigation (macOS).
 struct ContentView: View {
     @Environment(AppState.self) private var appState
 
@@ -34,10 +34,6 @@ struct ContentView: View {
                 }
                 .tag(AppState.Tab.settings)
             }
-            .fullScreenCover(isPresented: isNotAuthenticated) {
-                SignInView()
-                    .environment(appState)
-            }
             #else
             NavigationSplitView {
                 List(selection: $state.selectedTab) {
@@ -48,7 +44,7 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gearshape")
                         .tag(AppState.Tab.settings)
                 }
-                .navigationTitle("Intonavio")
+                .navigationTitle("IntonavioLocal")
             } detail: {
                 NavigationStack {
                     switch state.selectedTab {
@@ -62,26 +58,13 @@ struct ContentView: View {
                 }
             }
             .frame(minWidth: 900, minHeight: 600)
-            .sheet(isPresented: isNotAuthenticated) {
-                SignInView()
-                    .environment(appState)
-                    .frame(width: 400, height: 500)
-            }
             #endif
         }
         .tint(Color.intonavioIce)
         .background(Color.intonavioBackground)
         .onAppear {
-            appState.restoreAuth()
             WebViewPrewarmer.shared.warmUp()
         }
-    }
-
-    private var isNotAuthenticated: Binding<Bool> {
-        Binding(
-            get: { !appState.isAuthenticated },
-            set: { appState.isAuthenticated = !$0 }
-        )
     }
 }
 

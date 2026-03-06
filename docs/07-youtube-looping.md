@@ -1,8 +1,8 @@
-# Intonavio — YouTube Looping & Playback
+# IntonavioLocal — YouTube Looping & Playback
 
 ## Overview
 
-Intonavio embeds YouTube lyrics videos and provides A-B looping and the ability to switch between original audio and separated stems. On iOS, YouTube playback happens in a WKWebView using the YouTube IFrame Player API, controlled via a Swift ↔ JavaScript bridge. A transparent overlay blocks direct user interaction with the YouTube player's built-in controls — all playback is controlled via the app's controls bar.
+IntonavioLocal embeds YouTube lyrics videos and provides A-B looping and the ability to switch between original audio and separated stems. On iOS, YouTube playback happens in a WKWebView using the YouTube IFrame Player API, controlled via a Swift <-> JavaScript bridge. A transparent overlay blocks direct user interaction with the YouTube player's built-in controls — all playback is controlled via the app's controls bar.
 
 ---
 
@@ -83,9 +83,9 @@ YouTube audio is always muted. All audio comes from stems played through the sha
 
 Audio source buttons appear inline in the controls bar (next to A-B loop controls) once stems are downloaded.
 
-**FULL stem audio**: All songs include a `FULL` stem type — StemSplit's `fullAudio` output stored in R2 alongside vocals/instrumental. YouTube plays muted for video-only; all audio routes through `StemPlayer` on the shared `AudioEngine`.
+**FULL stem audio**: All songs include a `FULL` stem type — StemSplit's `fullAudio` output stored locally alongside vocals/instrumental. YouTube plays muted for video-only; all audio routes through `StemPlayer` on the shared `AudioEngine`.
 
-**Mode switching uses pause-switch-resume:** stop sync → stop stems → change mode/volumes → restart stems from current YouTube time → restart sync. This prevents race conditions where the sync system sees inconsistent state during transitions.
+**Mode switching uses pause-switch-resume:** stop sync -> stop stems -> change mode/volumes -> restart stems from current YouTube time -> restart sync. This prevents race conditions where the sync system sees inconsistent state during transitions.
 
 ---
 
@@ -128,22 +128,22 @@ sequenceDiagram
 ### Sync Rules
 
 - **YouTube is the master clock** — stem audio follows it. This prevents stems restarting at time 0 from pulling the video back to the beginning during mode switches.
-- Drift tolerance: **±300ms**. Beyond this, stems seek to match YouTube time. The 300ms threshold prevents constant micro-corrections (150ms triggered corrections every cycle due to inherent JS bridge latency).
+- Drift tolerance: **+/-300ms**. Beyond this, stems seek to match YouTube time. The 300ms threshold prevents constant micro-corrections (150ms triggered corrections every cycle due to inherent JS bridge latency).
 - Sync poll interval: **2 seconds**. Frequent polling (1s) caused excessive corrections without improving perceived sync.
 - Speed changes are applied to both stem playback (`AVAudioUnitTimePitch.rate`) and YouTube player (`setPlaybackRate()`) simultaneously.
-- On loop restart (B→A), both stem and video seek to marker A.
+- On loop restart (B->A), both stem and video seek to marker A.
 - `AVAudioSession` uses `.mixWithOthers` option so YouTube WebView and the shared AVAudioEngine coexist without triggering interruption notifications.
 
 ---
 
 ## Speed Control
 
-Speed control is available programmatically (0.25x–2.0x) but the speed selector UI has been removed from the practice screen controls bar to reduce clutter. Speed defaults to 1.0x.
+Speed control is available programmatically (0.25x-2.0x) but the speed selector UI has been removed from the practice screen controls bar to reduce clutter. Speed defaults to 1.0x.
 
 Speed is applied via:
 
 - **AVAudioEngine**: `audioPlayerNode.rate = speed` (using AVAudioUnitTimePitch to preserve pitch)
-- **YouTube**: `player.setPlaybackRate(speed)` — YouTube supports 0.25x–2x natively
+- **YouTube**: `player.setPlaybackRate(speed)` — YouTube supports 0.25x-2x natively
 
 ---
 
@@ -188,16 +188,16 @@ Note: The piano roll area below the video _is_ touch-interactive — it has its 
 </html>
 ```
 
-### Swift ↔ JS Bridge
+### Swift <-> JS Bridge
 
 | Direction  | Method                                               | Purpose            |
 | ---------- | ---------------------------------------------------- | ------------------ |
-| Swift → JS | `evaluateJavaScript("player.playVideo()")`           | Control playback   |
-| Swift → JS | `evaluateJavaScript("player.seekTo(time)")`          | Seek to time       |
-| Swift → JS | `evaluateJavaScript("player.setPlaybackRate(rate)")` | Change speed       |
-| Swift → JS | `evaluateJavaScript("player.getCurrentTime()")`      | Read position      |
-| Swift → JS | `evaluateJavaScript("player.mute()")`                | Mute YouTube audio |
-| JS → Swift | `WKScriptMessageHandler` (`ytEvent`)                 | Player events      |
+| Swift -> JS | `evaluateJavaScript("player.playVideo()")`           | Control playback   |
+| Swift -> JS | `evaluateJavaScript("player.seekTo(time)")`          | Seek to time       |
+| Swift -> JS | `evaluateJavaScript("player.setPlaybackRate(rate)")` | Change speed       |
+| Swift -> JS | `evaluateJavaScript("player.getCurrentTime()")`      | Read position      |
+| Swift -> JS | `evaluateJavaScript("player.mute()")`                | Mute YouTube audio |
+| JS -> Swift | `WKScriptMessageHandler` (`ytEvent`)                 | Player events      |
 
 ---
 
@@ -212,18 +212,16 @@ Note: The piano roll area below the video _is_ touch-interactive — it has its 
 | Second long press      | Set B marker            |
 | Double-tap loop badge  | Clear loop              |
 | Pinch timeline         | Zoom in/out on waveform |
-| Swipe left/right       | Scrub ±5 seconds        |
+| Swipe left/right       | Scrub +/-5 seconds      |
 
-### Web (Keyboard)
+### macOS (Keyboard)
 
-| Key                   | Action                                                         |
-| --------------------- | -------------------------------------------------------------- |
-| `Space`               | Play / Pause                                                   |
-| `[`                   | Set A marker at current time                                   |
-| `]`                   | Set B marker at current time                                   |
-| `Backspace`           | Clear loop                                                     |
-| `←` / `→`             | Seek ±5 seconds                                                |
-| `Shift+←` / `Shift+→` | Seek ±1 second                                                 |
-| `-` / `+`             | Decrease / increase speed by 0.25x                             |
-| `M`                   | Toggle mute vocals                                             |
-| `1`–`5`               | Solo stem (1=vocals, 2=instrumental, 3=drums, 4=bass, 5=other) |
+| Key                    | Action                     |
+| ---------------------- | -------------------------- |
+| `Space`                | Play / Pause               |
+| `[`                    | Set A marker               |
+| `]`                    | Set B marker               |
+| `Backspace`            | Clear loop                 |
+| `Left` / `Right`      | Seek +/-5 seconds          |
+| `Shift+Left` / `Right`| Seek +/-1 second           |
+| `-` / `+`             | Decrease / increase speed  |

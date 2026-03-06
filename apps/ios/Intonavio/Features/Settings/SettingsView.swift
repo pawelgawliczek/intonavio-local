@@ -3,21 +3,19 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = SettingsViewModel()
-    @State private var pitchCacheCleared = false
     @AppStorage("difficultyLevel") private var difficultyRaw = DifficultyLevel.beginner.rawValue
 
     var body: some View {
         List {
-            accountSection
+            apiKeySection
             audioInputSection
             guideToneSection
             difficultySection
-            dataSection
+            storageSection
             aboutSection
             #if DEBUG
             developerSection
             #endif
-            dangerSection
         }
         .navigationTitle("Settings")
         .onAppear { viewModel.loadAudioInputs() }
@@ -25,14 +23,6 @@ struct SettingsView: View {
             Button("OK") { viewModel.errorMessage = nil }
         } message: {
             Text(viewModel.errorMessage ?? "")
-        }
-        .alert("Delete Account", isPresented: $viewModel.showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
-                Task { await deleteAccount() }
-            }
-        } message: {
-            Text("This will permanently delete your account and all data. This cannot be undone.")
         }
     }
 
@@ -47,31 +37,23 @@ struct SettingsView: View {
 // MARK: - Sections
 
 private extension SettingsView {
-    var accountSection: some View {
-        Section("Account") {
+    var apiKeySection: some View {
+        Section("StemSplit API") {
             NavigationLink {
-                ProfileView()
+                APIKeySettingsView()
             } label: {
                 HStack {
-                    Image(systemName: "person.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading) {
-                        Text(appState.currentUser?.displayName ?? "User")
-                            .font(.body)
-                        if let email = appState.currentUser?.email {
-                            Text(email)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                    Text("API Key")
+                    Spacer()
+                    if KeychainService.hasStemSplitAPIKey {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("Not Set")
+                            .foregroundStyle(.orange)
                     }
                 }
             }
-
-            Button("Sign Out") {
-                appState.signOut()
-            }
-            .foregroundStyle(.red)
         }
     }
 
@@ -171,27 +153,26 @@ private extension SettingsView {
         }
     }
 
-    var dataSection: some View {
+    var storageSection: some View {
         Section {
-            Button {
-                PitchDataDownloader.clearAllCache()
-                pitchCacheCleared = true
-            } label: {
-                HStack {
-                    Text("Clear Pitch Cache")
-                    Spacer()
-                    if pitchCacheCleared {
-                        Text("Cleared")
-                            .foregroundStyle(Color.intonavioTextSecondary)
-                    }
-                }
+            HStack {
+                Text("Storage Used")
+                Spacer()
+                Text(formattedStorageSize)
+                    .foregroundStyle(Color.intonavioTextSecondary)
             }
-            .disabled(pitchCacheCleared)
         } header: {
             Text("Data")
         } footer: {
-            Text("Re-downloads pitch data from the server next time you practice a song.")
+            Text("Stems and pitch data are stored locally on your device.")
         }
+    }
+
+    private var formattedStorageSize: String {
+        let bytes = LocalStorageService.totalStorageUsed()
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
     }
 
     var aboutSection: some View {
@@ -216,33 +197,11 @@ private extension SettingsView {
         }
     }
     #endif
-
-    var dangerSection: some View {
-        Section {
-            Button("Delete Account") {
-                viewModel.showDeleteConfirmation = true
-            }
-            .foregroundStyle(.red)
-        } footer: {
-            Text("Permanently deletes your account and all associated data.")
-        }
-    }
 }
 
-// MARK: - Actions
+// MARK: - Helpers
 
 private extension SettingsView {
-    @MainActor
-    func deleteAccount() async {
-        viewModel.isDeleting = true
-        do {
-            try await appState.deleteAccount()
-        } catch {
-            viewModel.errorMessage = (error as? APIError)?.message ?? error.localizedDescription
-        }
-        viewModel.isDeleting = false
-    }
-
     var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
@@ -252,13 +211,9 @@ private extension SettingsView {
 
 // MARK: - Difficulty Zone Preview
 
-/// Horizontal bar showing relative zone widths for a difficulty level.
-/// Uses the widest level (beginner) as the full-width reference so
-/// bars visibly shrink for harder difficulties.
 private struct DifficultyZonePreview: View {
     let difficulty: DifficultyLevel
 
-    /// Fixed reference so all levels are compared against the same max.
     private let maxCents = DifficultyLevel.beginner.fairCents
 
     var body: some View {
@@ -266,17 +221,14 @@ private struct DifficultyZonePreview: View {
             let width = geometry.size.width
 
             ZStack(alignment: .leading) {
-                // Fair
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.orange.opacity(0.3))
                     .frame(width: width * CGFloat(difficulty.fairCents / maxCents))
 
-                // Good
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.yellow.opacity(0.4))
                     .frame(width: width * CGFloat(difficulty.goodCents / maxCents))
 
-                // Excellent
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.green.opacity(0.5))
                     .frame(width: width * CGFloat(difficulty.excellentCents / maxCents))

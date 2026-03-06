@@ -1,36 +1,38 @@
-# Intonavio — Project Instructions
+# IntonavioLocal — Project Instructions
 
 ## Project Overview
 
-Intonavio is a singing practice app (iOS → macOS → Web SaaS) that uses YouTube lyrics videos, stem separation (StemSplit API), and real-time pitch detection to help singers improve. See `docs/01-overview.md` for full product details.
+IntonavioLocal is a fully on-device singing practice app for iOS and macOS. It uses YouTube lyrics videos, stem separation (StemSplit API — user provides their own API key), and real-time pitch detection to help singers improve. Unlike the original Intonavio, this version runs 100% on-device with no backend server — all pitch analysis, data storage, and session tracking happen locally.
 
 ## Tech Stack
 
-- **API**: NestJS (TypeScript), Prisma, BullMQ, PostgreSQL 16, Redis 7
-- **iOS/macOS**: SwiftUI, AVAudioEngine, WKWebView
-- **Web**: Next.js 14, React 18, Tailwind CSS, AudioWorklet
-- **Pitch Worker**: Python 3.11, librosa, pYIN
-- **Storage**: Cloudflare R2 (stems + pitch data)
-- **Auth**: Apple Sign In, Google OAuth, Email/Password, JWT
-- **Infrastructure**: Docker Compose, Caddy reverse proxy
-- **CI/CD**: GitHub Actions
-- **Monorepo**: Turborepo, pnpm workspaces
+- **iOS/macOS**: SwiftUI, AVAudioEngine, WKWebView, SwiftData
+- **Pitch Analysis**: On-device batch YIN (Accelerate/vDSP)
+- **Storage**: SwiftData (structured data), Documents directory (stems + pitch data), Keychain (API key)
+- **External**: StemSplit API (stem separation, user-provided API key), YouTube oEmbed (metadata)
+- **Build**: XcodeGen (`project.yml`)
+
+## Architecture
+
+```
+iOS App (SwiftUI)
+    ├── SwiftData (songs, stems, sessions)
+    ├── Documents/ (stem audio files, pitch reference JSON)
+    ├── Keychain (StemSplit API key)
+    ├── StemSplit API (direct URLSession calls)
+    ├── YouTube oEmbed (metadata)
+    └── On-device YIN pitch analysis (Accelerate)
+```
+
+**No backend server.** The app calls the StemSplit API directly, downloads stems to local storage, analyzes pitch on-device using the YIN algorithm, and stores all data in SwiftData.
 
 ## Critical Coding Rules
 
-These rules apply to every code change. Full details in `docs/12-code-quality.md`.
-
 ### Absolute Prohibitions
 
-- No `any` types in TypeScript — use `unknown` and narrow with type guards.
-- No `console.log` in committed code — use the project logger (Pino for NestJS, `logging` for Python).
-- No hardcoded secrets, URLs, or environment-specific values — use env vars validated at startup.
+- No hardcoded secrets, URLs, or environment-specific values.
 - No dead code — don't comment out code "for later", delete it.
-- No barrel files (`index.ts` re-exports) except in `packages/shared`.
-- No disabled linter rules without a comment explaining why.
-- No `var` — use `const`, or `let` only when reassignment is needed.
-- No `process.env` in NestJS services — inject `ConfigService`.
-- No `db push` in production — use `prisma migrate deploy`.
+- No `var` — use `let`, or `var` only when reassignment is needed.
 
 ### Naming & Style
 
@@ -42,74 +44,80 @@ These rules apply to every code change. Full details in `docs/12-code-quality.md
 ### Size Limits
 
 - Max 300 lines per file, 40 lines per function, 150 lines per View/component.
-- Max 4 function parameters — beyond that, use an options object.
+- Max 4 function parameters — beyond that, use an options object/struct.
 - Max nesting depth: 3 levels.
 
-### TypeScript Strict Mode
+### SwiftUI & Swift
 
-- `"strict": true` in tsconfig — no exceptions.
-- All DTOs use `class-validator` decorators.
-- Prefer `interface` for object shapes, `type` for unions/intersections.
-- No relative imports deeper than `../../` — use path aliases.
-
-### Architecture (quick reference)
-
-- Dependencies point inward: Clients → API → Services → Infrastructure.
-- Every external service behind an adapter interface (see `docs/02-architecture.md`).
-- Controllers: HTTP concerns only. Business logic in services.
-- All jobs must be idempotent.
-- Clients are renderers of server state — no duplicated business logic.
+- Use `@Observable` for view models, not `ObservableObject`.
+- Use SwiftData `@Model` for persistent data.
+- Views are declarative — no side effects in `body`.
+- Extract subviews when a view exceeds 150 lines.
+- Use `AppLogger` (OSLog) for logging, never `print()`.
 
 ### Git
 
 - Imperative mood commits: `Add stem download endpoint`.
 - One logical change per commit. All changes via PRs to `main`.
 
-## Before Implementing
+## Key Architecture Decisions
 
-Before writing any code, read the docs relevant to the work:
+### Data Flow
 
-- **Any backend change** (API, services, controllers) → read `docs/12-code-quality.md` (NestJS, Prisma, BullMQ sections), `docs/02-architecture.md` (Architecture Rules)
-- **Any Python worker change** → read `docs/12-code-quality.md` (Python section), `docs/13-observability.md` (Python Worker debugging)
-- **Any iOS/macOS change** → read `docs/12-code-quality.md` (SwiftUI section), `docs/13-observability.md` (iOS Client debugging), `docs/16-ui-views-flow.md` (views & navigation)
-- **Any web change** → read `docs/12-code-quality.md` (Next.js section), `docs/13-observability.md` (Web Client debugging), `docs/16-ui-views-flow.md` (views & navigation)
-- **Any new feature or endpoint** → read `docs/14-testing-strategy.md`, `docs/03-api-design.md`
-- **Any infra or CI change** → read `docs/15-development-workflow.md`, `docs/08-infrastructure.md`
-- **Any data model change** → read `docs/04-data-models.md`, `docs/12-code-quality.md` (Prisma section)
-- **Any audio pipeline change** → read `docs/05-audio-pipeline.md`, `docs/06-realtime-pitch.md`
+1. User pastes YouTube URL
+2. `SongProcessingService` orchestrates the pipeline:
+   - Fetches metadata via YouTube oEmbed
+   - Creates `SongModel` in SwiftData (status: queued)
+   - Calls StemSplit API to create job (status: splitting)
+   - Polls job status every 15s (max 10 min)
+   - Downloads stems in parallel (status: downloading)
+   - Saves stems to `Documents/stems/{songId}/`
+   - Runs on-device pitch analysis (status: analyzing)
+   - Saves pitch data to `Documents/pitch/{songId}/reference.json`
+   - Sets status to ready
 
-Always read `docs/12-code-quality.md` — it applies to every change.
+### Models (SwiftData)
 
-## Documentation Reference
+- `SongModel` — song metadata, status, relationships to stems/sessions
+- `StemModel` — stem type, local file path, file size
+- `SessionModel` — practice session with score, pitch log, duration
 
-| Topic                        | Document                           |
-| ---------------------------- | ---------------------------------- |
-| Product overview             | `docs/01-overview.md`              |
-| System architecture & rules  | `docs/02-architecture.md`          |
-| API contracts                | `docs/03-api-design.md`            |
-| Data models (Prisma)         | `docs/04-data-models.md`           |
-| Audio processing pipeline    | `docs/05-audio-pipeline.md`        |
-| Real-time pitch detection    | `docs/06-realtime-pitch.md`        |
-| YouTube looping              | `docs/07-youtube-looping.md`       |
-| Infrastructure & deployment  | `docs/08-infrastructure.md`        |
-| Project structure            | `docs/09-project-structure.md`     |
-| Implementation phases        | `docs/10-implementation-phases.md` |
-| Spikes                       | `docs/11-spikes.md`                |
-| Code quality standards       | `docs/12-code-quality.md`          |
-| Observability & debugging    | `docs/13-observability.md`         |
-| Testing strategy             | `docs/14-testing-strategy.md`      |
-| Development workflow & CI/CD | `docs/15-development-workflow.md`  |
-| UI views & navigation flow   | `docs/16-ui-views-flow.md`         |
+### Services
 
-Do not deviate from documented architecture without updating the relevant doc first.
+- `SongProcessingService` — orchestrates the full song pipeline
+- `StemSplitService` — direct URLSession calls to StemSplit API
+- `YouTubeMetadataService` — YouTube oEmbed + thumbnail resolution
+- `PitchAnalyzer` — batch YIN pitch analysis on vocal stem
+- `LocalStorageService` — file path management for Documents directory
+- `KeychainService` — secure API key storage
 
 ## iOS Build
 
-- When building for iOS Simulator, use `iPhone 17 Pro` as the destination (iPhone 16 is not available).
-- Example: `xcodebuild -project apps/ios/Intonavio.xcodeproj -scheme Intonavio -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build`
+- When building for iOS Simulator, use `iPhone 17 Pro` as the destination.
+- Generate project: `cd apps/ios && xcodegen generate`
+- Build: `xcodebuild -project apps/ios/IntonavioLocal.xcodeproj -scheme IntonavioLocal -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build`
 
-## Deployment
+## Project Structure
 
-- Deploy flow: push to `main` → CI builds Docker images → deploys via SSH → runs migrations → health check
-- See `docs/08-infrastructure.md` for full infrastructure details
-- See `.github/workflows/deploy.yml` for the deploy pipeline
+```
+IntonavioLocal/
+├── apps/
+│   └── ios/
+│       ├── project.yml              # XcodeGen project definition
+│       └── Intonavio/
+│           ├── App/                  # App entry point, AppState, ContentView
+│           ├── Audio/                # AudioEngine, StemPlayer, pitch detection
+│           │   └── Pitch/            # YINDetector, PitchDetector, ScoringEngine
+│           ├── Data/                 # SwiftData models (Song, Stem, Session)
+│           ├── Features/
+│           │   ├── Library/          # Song library, add song
+│           │   ├── Practice/         # Song & exercise practice, piano roll
+│           │   ├── Progress/         # Score tracking
+│           │   ├── Sessions/         # Session history
+│           │   └── Settings/         # Settings, API key, developer tools
+│           ├── Services/             # StemSplit, YouTube, PitchAnalyzer, storage
+│           ├── YouTube/              # WKWebView YouTube player
+│           └── Utilities/            # Logging, extensions
+├── docs/                             # Architecture & design docs
+└── screenshots/                      # App screenshots
+```

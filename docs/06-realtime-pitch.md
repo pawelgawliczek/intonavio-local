@@ -1,4 +1,4 @@
-# Intonavio — Real-Time Pitch Detection
+# IntonavioLocal — Real-Time Pitch Detection
 
 ## Overview
 
@@ -23,7 +23,7 @@ graph LR
     Cents --> UI[Piano Roll UI<br/>SwiftUI Canvas]
 ```
 
-### iOS Implementation Notes
+### Implementation Notes
 
 - A shared **AudioEngine** wraps a single `AVAudioEngine` with voice processing (AEC) enabled on the input node
 - **StemPlayer**, **PitchDetector**, and **MetronomeTick** all receive the shared engine via init — none creates its own
@@ -51,7 +51,7 @@ AVAudioSession.sharedInstance().setCategory(
 
 Three filters prevent false detections:
 
-1. **RMS noise gate**: Before running YIN, compute RMS via `vDSP_rmsqv` (Accelerate framework). If RMS < 0.01 (~-40 dB), skip detection entirely. This filters true silence after AEC removes the music.
+1. **RMS noise gate**: Before running YIN, compute RMS via `vDSP_rmsqv` (Accelerate framework). If RMS < 0.005 (~-46 dB), skip detection entirely. This filters true silence after AEC removes the music.
 2. **Confidence threshold**: Set to 0.85 (stricter than the typical 0.80). Rejects low-confidence detections from residual noise.
 3. **MIDI jump filter**: Reject detections where MIDI jumps >12 semitones (1 octave) within 50ms of the previous detection. This catches spurious octave jumps from harmonic confusion.
 
@@ -73,7 +73,7 @@ sharedEngine.installInputTap(bufferSize: 1024, format: format) { buffer, time in
     // RMS noise gate
     var rms: Float = 0
     vDSP_rmsqv(samples, 1, &rms, vDSP_Length(samples.count))
-    guard rms >= 0.01 else { return }
+    guard rms >= 0.005 else { return }
 
     let (frequency, confidence) = yinDetect(samples, sampleRate: format.sampleRate)
 
@@ -87,31 +87,11 @@ sharedEngine.installInputTap(bufferSize: 1024, format: format) { buffer, time in
 
 ---
 
-## Web Audio Graph
-
-```mermaid
-graph LR
-    Mic[Microphone<br/>MediaStream] --> Source[MediaStreamSource<br/>AudioContext]
-    Source --> Worklet[AudioWorkletNode<br/>YIN Processor]
-    Worklet -->|postMessage| Main[Main Thread<br/>frequency + confidence]
-    Main --> Compare[Compare vs Reference]
-    Compare --> UI[Piano Roll<br/>Canvas / SVG]
-```
-
-### Web Implementation Notes
-
-- **AudioWorklet** runs pitch detection off the main thread for smooth UI
-- The worklet processor accumulates samples until it has 1024, then runs YIN
-- Results are sent via `postMessage` to the main thread
-- Reference pitch data is pre-loaded as a typed array for fast lookup
-
----
-
 ## Pitch Comparison Flow
 
 ```mermaid
 flowchart TD
-    A[Mic buffer arrives<br/>1024 samples] --> A1{RMS > 0.01?}
+    A[Mic buffer arrives<br/>1024 samples] --> A1{RMS > 0.005?}
     A1 -->|No| D[Skip — below<br/>noise floor]
     A1 -->|Yes| B[Run YIN algorithm]
     B --> C{Confidence > 0.85?}
@@ -122,11 +102,11 @@ flowchart TD
 
     E --> F[Get current playback<br/>time T seconds]
     F --> G[Binary search reference<br/>pitch at time T]
-    G --> G2[Apply transpose offset<br/>refHz × 2^semitones/12]
+    G --> G2[Apply transpose offset<br/>refHz x 2^semitones/12]
     G2 --> H{Reference frame<br/>voiced?}
 
     H -->|No| I[Skip comparison<br/>no reference note]
-    H -->|Yes| J[Compute cents deviation<br/>1200 × log2 detected/adjustedRef]
+    H -->|Yes| J[Compute cents deviation<br/>1200 x log2 detected/adjustedRef]
 
     J --> K{Classify accuracy}
     K -->|within excellent zone| L[Excellent<br/>green]
@@ -148,18 +128,18 @@ Thresholds and point rewards are controlled by `DifficultyLevel` (stored in User
 
 | Category  | Beginner             | Intermediate        | Advanced            | Color  |
 | --------- | -------------------- | ------------------- | ------------------- | ------ |
-| Excellent | ±150 cents → 100 pts | ±25 cents → 100 pts | ±25 cents → 100 pts | Green  |
-| Good      | ±300 cents → 75 pts  | ±50 cents → 60 pts  | ±40 cents → 50 pts  | Yellow |
-| Fair      | ±450 cents → 40 pts  | ±75 cents → 25 pts  | ±60 cents → 20 pts  | Orange |
-| Poor      | >450 cents → 0 pts   | >75 cents → 0 pts   | >60 cents → 0 pts   | Gray   |
+| Excellent | +/-150 cents, 100 pts | +/-25 cents, 100 pts | +/-25 cents, 100 pts | Green  |
+| Good      | +/-300 cents, 75 pts  | +/-50 cents, 60 pts  | +/-40 cents, 50 pts  | Yellow |
+| Fair      | +/-450 cents, 40 pts  | +/-75 cents, 25 pts  | +/-60 cents, 20 pts  | Orange |
+| Poor      | >450 cents, 0 pts   | >75 cents, 0 pts   | >60 cents, 0 pts   | Gray   |
 
 Piano roll zone bands visually reflect the selected difficulty (wider bands = easier). Best scores are tracked per difficulty level via a `difficulty` field on `ScoreRecord` (SwiftData).
 
 **Cents formula (with transpose):**
 
 ```
-adjustedRefHz = referenceHz × 2^(transposeSemitones / 12)
-cents = 1200 × log₂(detectedHz / adjustedRefHz)
+adjustedRefHz = referenceHz x 2^(transposeSemitones / 12)
+cents = 1200 x log2(detectedHz / adjustedRefHz)
 ```
 
 When `transposeSemitones = 0`, this reduces to the standard formula. One semitone = 100 cents.
@@ -167,7 +147,7 @@ When `transposeSemitones = 0`, this reduces to the standard formula. One semiton
 **Overall session score:**
 
 ```
-score = (sum of frame scores / number of voiced reference frames) × 100
+score = (sum of frame scores / number of voiced reference frames) x 100
 ```
 
 Only frames where the reference vocal is voiced and audible (`rms >= 0.02`) are counted — silence, breaths, instrumental sections, and low-energy stem separation artifacts are excluded.
@@ -201,7 +181,7 @@ Users can shift the reference pitch graph up or down by musical intervals to pra
 | Component              | Transposed? | Why                                                    |
 | ---------------------- | ----------- | ------------------------------------------------------ |
 | Reference zones/lines  | Yes         | MIDI notes shifted by `transposeOffset` on piano roll  |
-| Reference Hz (scoring) | Yes         | `refHz × 2^(semitones/12)` before cents calculation    |
+| Reference Hz (scoring) | Yes         | `refHz x 2^(semitones/12)` before cents calculation    |
 | Detected pitch display | No          | User's voice shown at actual position                  |
 | MIDI range (Y-axis)    | Yes         | Piano roll range shifts to keep transposed ref visible |
 | Audio playback         | No          | No pitch-shifting of stems or YouTube audio            |
@@ -239,7 +219,7 @@ The user toggles between 3 modes via a segmented control on the pitch graph:
 | Property             | Value                                                                    |
 | -------------------- | ------------------------------------------------------------------------ |
 | Visible time window  | 8 seconds (4s past + 4s future)                                          |
-| Y-axis range         | Dynamic, centered on current note ±1 octave                              |
+| Y-axis range         | Dynamic, centered on current note +/-1 octave                            |
 | Update rate          | ~43 FPS (matching audio callback rate)                                   |
 | Reference bar height | 1 semitone                                                               |
 | Dot size             | 4pt                                                                      |
@@ -267,11 +247,11 @@ The piano roll supports touch gestures that decouple the displayed time from pla
 **Position-to-time conversion:**
 
 ```
-touchTime = centerTime - windowDuration/2 + (x / canvasWidth) × windowDuration
-dragOffset = -(translation.width / canvasWidth) × windowDuration
+touchTime = centerTime - windowDuration/2 + (x / canvasWidth) x windowDuration
+dragOffset = -(translation.width / canvasWidth) x windowDuration
 ```
 
-**Long press phrase lookup:** `referenceStore.phrase(at: touchTime)` finds the phrase under the finger. If no exact match, the nearest phrase within ±2 seconds is selected. Haptic feedback on iOS (light impact on touch, medium on loop creation, rigid on no phrase found).
+**Long press phrase lookup:** `referenceStore.phrase(at: touchTime)` finds the phrase under the finger. If no exact match, the nearest phrase within +/-2 seconds is selected. Haptic feedback on iOS (light impact on touch, medium on loop creation, rigid on no phrase found).
 
 ---
 
@@ -300,20 +280,23 @@ YIN is an autocorrelation-based pitch detection algorithm optimized for monophon
 
 1. Compute the difference function (autocorrelation variant)
 2. Cumulative mean normalized difference
-3. Absolute threshold (τ where d'(τ) < threshold)
+3. Absolute threshold (tau where d'(tau) < threshold)
 4. Parabolic interpolation for sub-sample accuracy
 5. Convert lag to frequency: `f = sampleRate / lag`
 
-**Why YIN over alternatives?**
+**Usage in IntonavioLocal:**
 
-| Algorithm    | Pros                                       | Cons                               | Used In              |
-| ------------ | ------------------------------------------ | ---------------------------------- | -------------------- |
-| **YIN**      | Fast, accurate for monophonic, low latency | Requires tuning threshold          | iOS & Web real-time  |
-| **pYIN**     | Probabilistic, handles vibrato better      | Slower (batch processing)          | Server-side analysis |
-| **FFT peak** | Simple                                     | Poor resolution at low frequencies | Not used             |
-| **CREPE**    | Neural net, very accurate                  | Too slow for real-time on mobile   | Not used             |
+| Context              | Algorithm | Purpose                                                   |
+| -------------------- | --------- | --------------------------------------------------------- |
+| **Real-time (mic)**  | YIN       | Fast, low-latency pitch detection during practice         |
+| **Batch (reference)**| YIN       | On-device reference pitch extraction from vocal stem      |
 
-The iOS and Web clients use classic YIN for real-time detection. The Python worker uses pYIN (via librosa) for offline reference pitch extraction where accuracy matters more than speed.
+Both real-time and batch analysis use the same YIN algorithm implementation (`YINDetector`), with different parameters:
+
+- **Real-time**: 1024-sample buffer from mic tap, optimized for low latency
+- **Batch**: 2048-sample window with 512-sample hop over the entire vocal stem file, optimized for accuracy
+
+The batch analysis runs on-device via `PitchAnalyzer` using Accelerate/vDSP. See `docs/05-audio-pipeline.md` for the full pipeline and `docs/yin-comparison-results.md` for accuracy comparison data.
 
 ---
 
@@ -324,7 +307,7 @@ The piano roll and scoring pipeline consume the same `{t, hz, midi, voiced, rms}
 ```mermaid
 flowchart TD
     subgraph Song Path
-        A[Vocal Stem MP3] --> B[Python Worker<br/>pYIN via librosa]
+        A[Vocal Stem MP3] --> B[On-device YIN<br/>PitchAnalyzer + Accelerate/vDSP]
         B --> C[reference.json]
     end
 
@@ -340,26 +323,25 @@ flowchart TD
 
 ### Exercise Pitch Data Generation
 
-The generator expands an exercise note definition (see [[04-data-models]]) into frame-by-frame pitch data at the same 11.6ms hop interval used by pYIN extraction.
+The generator expands an exercise note definition (see `docs/04-data-models.md`) into frame-by-frame pitch data at the same 11.6ms hop interval used by YIN extraction.
 
 **Algorithm:**
 
 1. Read exercise `notes` array and `tempo` (BPM)
-2. Convert beat durations to seconds: `seconds = beats × 60 / tempo`
+2. Convert beat durations to seconds: `seconds = beats x 60 / tempo`
 3. For each note, generate frames at 11.6ms intervals:
-   - **Sustained note**: all frames at `baseHz = 440 × 2^((midi - 69) / 12)`
-   - **With vibrato**: modulate each frame: `hz = baseHz × 2^(vibratoCents × sin(2π × rateHz × t) / 1200)`
+   - **Sustained note**: all frames at `baseHz = 440 x 2^((midi - 69) / 12)`
+   - **With vibrato**: modulate each frame: `hz = baseHz x 2^(vibratoCents x sin(2pi x rateHz x t) / 1200)`
    - **Rest period**: generate unvoiced frames (`hz: null, voiced: false`)
 4. Write the complete frame array as the same JSON format used by songs
-5. Upload to R2 at `pitch/{exerciseId}/reference.json`
 
 **Example: C4 sustained for 2 beats at 80 BPM with vibrato**
 
-- Duration: 2 × 60/80 = 1.5 seconds = ~129 frames
+- Duration: 2 x 60/80 = 1.5 seconds = ~129 frames
 - Base frequency: 261.63 Hz (MIDI 60)
-- Each frame: `hz = 261.63 × 2^(30 × sin(2π × 5.5 × t) / 1200)`
+- Each frame: `hz = 261.63 x 2^(30 x sin(2pi x 5.5 x t) / 1200)`
 
-The result is a smooth pitch curve that oscillates ±30 cents around C4 at 5.5 Hz — the singer must match this curve to score well on vibrato exercises.
+The result is a smooth pitch curve that oscillates +/-30 cents around C4 at 5.5 Hz — the singer must match this curve to score well on vibrato exercises.
 
 ### Why This Works
 
@@ -369,11 +351,11 @@ The client never needs to know whether it's practicing a song or an exercise. It
 
 ## Reference Pitch RMS Filtering
 
-Vocal stems from stem separation contain low-energy residual noise from other instruments. The pYIN algorithm marks these as "voiced" because they have detectable pitch, but they are artifacts — not real vocal signal. The `rms` field in each pitch frame enables the client to filter them out.
+Vocal stems from stem separation contain low-energy residual noise from other instruments. The YIN algorithm may mark these as "voiced" because they have detectable pitch, but they are artifacts — not real vocal signal. The `rms` field in each pitch frame enables filtering them out.
 
 ### How It Works
 
-1. **Worker side**: `librosa.feature.rms()` computes per-frame energy alongside `librosa.pyin()` using the same hop length. Values are included in the JSON output.
+1. **Analysis side**: `vDSP_rmsqv` computes per-frame energy alongside YIN pitch extraction using the same window. Values are included in the JSON output.
 2. **Client side**: Frames with `rms < 0.02` are considered "inaudible" and excluded from:
    - Piano roll rendering (no reference zones/lines drawn for inaudible frames)
    - MIDI range computation (prevents artifacts from expanding the Y-axis range)
@@ -381,11 +363,11 @@ Vocal stems from stem separation contain low-energy residual noise from other in
 
 ### Threshold Selection
 
-The threshold of `0.02` was chosen empirically. In tested vocal stems, real vocal signal has RMS values > 0.05, while stem separation artifacts typically have RMS values in the range 0.0001–0.001.
+The threshold of `0.02` was chosen empirically. In tested vocal stems, real vocal signal has RMS values > 0.05, while stem separation artifacts typically have RMS values in the range 0.0001-0.001.
 
-### Pitch Data Caching
+### Pitch Data Storage
 
-Pitch data is cached locally at `~/Library/Caches/pitch/{songId}/reference.json`. The cache persists across sessions. If pitch data is re-analyzed on the server (e.g., after a worker update), users can clear the cache via Settings > Data > "Clear Pitch Cache" to force a re-download.
+Pitch data is stored locally at `Documents/pitch/{songId}/reference.json`. The data persists across sessions. If a user wants to re-analyze pitch data (e.g., after an app update improves the algorithm), they can delete and reprocess the song.
 
 ---
 
@@ -395,16 +377,16 @@ When an A-B loop is active, the scoring engine provides per-pass feedback to sho
 
 ### Per-Pass Scoring Flow
 
-1. User sets markers A and B → loop state becomes `.looping`
+1. User sets markers A and B -> loop state becomes `.looping`
 2. `ScoringEngine.reset()` clears accumulated scores for the new loop
 3. Playback proceeds from A to B, scoring each detected pitch against the reference
 4. When `currentTime >= B`, before seeking back to A:
    - Capture `scoringEngine.overallScore` as the pass score
-   - Compare to the previous pass score → compute improvement (better/worse/same)
+   - Compare to the previous pass score -> compute improvement (better/worse/same)
    - Reset the scoring engine for the next pass
    - Show a toast overlay with score and delta (auto-dismisses after 2 seconds)
 5. Increment `loopCount` and seek back to A
 
 ### MIDI Range Recalibration
 
-When a loop is activated, the piano roll's Y-axis range recalibrates to the looped section's pitch range (with ±3 semitone padding) instead of using the full song's range. This zooms in to show the relevant notes for the section being practiced. The range reverts to full-song when the loop is cleared.
+When a loop is activated, the piano roll's Y-axis range recalibrates to the looped section's pitch range (with +/-3 semitone padding) instead of using the full song's range. This zooms in to show the relevant notes for the section being practiced. The range reverts to full-song when the loop is cleared.

@@ -1,30 +1,24 @@
-# Intonavio — UI Views & Flow
+# IntonavioLocal — UI Views & Flow
 
 ## Context
 
-Defining all views, navigation, and layout decisions for the Intonavio singing practice app before implementation begins. This covers iOS (primary), with web and macOS following the same structure later.
+Defining all views, navigation, and layout decisions for the IntonavioLocal singing practice app. This covers iOS (primary) and macOS (shared codebase).
 
 ---
 
-## Views (11 total)
-
-### Auth
-
-1. **Sign In** — Apple / Google / Email options
-2. **Sign Up** — Email registration form
+## Views
 
 ### Home (Tab 1: Library)
 
-3. **Home** — Two sections stacked vertically:
+1. **Home** — Two sections stacked vertically:
    - **Song Library** — Grid of user's songs (thumbnail, title, artist, status badge). "Add Song" button.
-   - **Exercises** — Horizontal scrollable categories (Scales, Arpeggios, Intervals, Vibrato, Breathing). Pre-built exercises ship with app; community-shared exercises available via browse/search.
+   - **Exercises** — Horizontal scrollable categories (Scales, Arpeggios, Intervals, Vibrato, Breathing). Pre-built exercises ship with app.
 
-4. **Add Song Sheet** — YouTube URL input, validation, submit. Shows processing progress after submission.
-5. **Exercise Browser** — Browse/search community exercises, filter by category/difficulty.
+2. **Add Song Sheet** — YouTube URL input, validation, submit. Shows processing progress after submission (splitting -> downloading -> analyzing -> ready).
 
 ### Practice
 
-6. **Song Practice** — Full-screen, toggleable layout between two modes:
+3. **Song Practice** — Full-screen, toggleable layout between two modes:
    - **Lyrics-focused**: Video ~65%, pitch graph ~35%
    - **Pitch-focused**: Video ~25% (small strip), pitch graph ~75%
    - Swipe or tap button to toggle between layouts
@@ -34,15 +28,15 @@ Defining all views, navigation, and layout decisions for the Intonavio singing p
    - **YouTube video**: Non-interactive — covered by a transparent touch-blocking overlay. All playback controlled via controls bar.
    - **Piano roll**: Interactive — touch to pause, swipe to scrub with momentum, long-press to loop a phrase (see Piano Roll Touch Gestures below).
 
-7. **Exercise Practice** — Same pitch graph as song practice but no video. Shows exercise name, target notes as reference, and tempo/metronome guide.
+4. **Exercise Practice** — Same pitch graph as song practice but no video. Shows exercise name, target notes as reference, and tempo/metronome guide.
 
-### Pitch Graph Component (shared by views 6 & 7)
+### Pitch Graph Component (shared by views 3 & 4)
 
-- Piano roll style (like Sing & See reference): piano keys on Y-axis, scrolling time on X-axis
+- Piano roll style: piano keys on Y-axis, scrolling time on X-axis
 - **Interactive gestures**: Touch to pause, swipe to scrub with momentum, long-press to loop a phrase (see Piano Roll Touch Gestures below)
 - **3 visualization modes** (user toggles via segmented control):
-  - **Target Zones + Colored Line**: Reference pitch as semi-transparent bands, user's live pitch as a continuous line colored by accuracy (green ±10¢, yellow-green ±25¢, yellow ±50¢, red >50¢)
-  - **Two Distinct Lines**: Reference as thin dashed neutral line, user's pitch as bold colored line (same color scheme)
+  - **Target Zones + Colored Line**: Reference pitch as semi-transparent bands, user's live pitch as a continuous line colored by accuracy
+  - **Two Distinct Lines**: Reference as thin dashed neutral line, user's pitch as bold colored line
   - **Target Zones + Glowing Trail**: Reference as bands, user's pitch as animated glowing trail with intensity based on accuracy
 - Current note name displayed large (left side), with cents deviation indicator
 - Scrolling window: ~4s past + 4s future visible
@@ -50,17 +44,29 @@ Defining all views, navigation, and layout decisions for the Intonavio singing p
 
 ### Sessions (Tab 2)
 
-8. **Session History** — List of past practice sessions (date, song/exercise name, duration, score)
-9. **Session Detail** — Replay pitch graph (scrubable), score breakdown, loop points used, speed used
+5. **Session History** — List of past practice sessions (date, song/exercise name, duration, score)
+6. **Session Detail** — Replay pitch graph (scrubbable), score breakdown, loop points used, speed used
 
 ### Settings (Tab 3)
 
-10. **Settings** — Account management, audio input selection, theme (dark/light), pitch data cache management (clear & re-download)
-11. **Profile / Community** — User's shared exercises, stats, linked accounts
+7. **Settings** — Sections:
+   - **StemSplit API** — API key management (navigate to API Key settings view, shows checkmark if key is set)
+   - **Audio Input** — Microphone/input device selection
+   - **Guide Tone** — Instrument selection for guide tone playback
+   - **Difficulty** — Beginner / Intermediate / Advanced with zone width preview
+   - **Data** — Storage usage display
+   - **About** — App version
+   - **Developer** (DEBUG only) — Developer tools and diagnostics
+
+8. **API Key Settings** — Enter/update/remove StemSplit API key (stored in Keychain, displayed masked)
+9. **Guide Tone Settings** — Select instrument for guide tone from available options
+10. **Developer View** (DEBUG only) — Diagnostic tools for debugging
 
 ---
 
-## Navigation Structure (iOS)
+## Navigation Structure
+
+### iOS
 
 ```
 Tab Bar (3 tabs)
@@ -69,40 +75,49 @@ Tab Bar (3 tabs)
 │   │   ├── Add Song (sheet)
 │   │   └── Song → Song Practice (full-screen push)
 │   └── Exercises section
-│       ├── Exercise → Exercise Practice (full-screen push)
-│       └── Browse Community (push)
+│       └── Exercise → Exercise Practice (full-screen push)
 ├── Sessions
 │   └── Session → Session Detail (push)
 └── Settings
-    └── Profile / Community (push)
+    ├── API Key Settings (push)
+    ├── Guide Tone Settings (push)
+    └── Developer Tools (push, DEBUG only)
 ```
+
+### macOS
+
+```
+NavigationSplitView
+├── Sidebar
+│   ├── Library
+│   ├── Sessions
+│   └── Settings
+└── Detail (NavigationStack)
+    └── Same views as iOS
+```
+
+ContentView uses `TabView` on iOS and `NavigationSplitView` on macOS, with `AppState.selectedTab` driving selection.
 
 ---
 
 ## Primary User Flows
 
-### New User
+### First-Time User
 
 ```
-Sign In → Home (empty library) → Add Song → Processing... → Song ready → Tap song → Song Practice → Session saved → Sessions tab
+Launch → Settings → Enter StemSplit API Key → Library (empty) → Add Song → Processing... → Song ready → Tap song → Song Practice → Session saved → Sessions tab
 ```
 
 ### Returning Singer
 
 ```
-Home → Tap song → Song Practice (toggle to pitch-focused) → Set A-B loop → Adjust speed → Practice → Done → Score shown → Session saved
+Library → Tap song → Song Practice (toggle to pitch-focused) → Set A-B loop → Practice → Done → Score shown → Session saved
 ```
 
 ### Exercise Warmup
 
 ```
-Home → Scroll to Exercises → Tap scale exercise → Exercise Practice → Sing along to target notes → Score → Session saved
-```
-
-### Browse Community Exercises
-
-```
-Home → Exercises → Browse Community → Search/filter → Add to library → Practice
+Library → Scroll to Exercises → Tap scale exercise → Exercise Practice → Sing along to target notes → Score → Session saved
 ```
 
 ---
@@ -141,7 +156,7 @@ Home → Exercises → Browse Community → Search/filter → Add to library →
 │   Piano Roll Pitch Graph    │
 │   [Loop Score Toast: 78%↑5] │
 │   [ref bands + user line]   │
-│   Current note: C4  +5¢    │
+│   Current note: C4  +5c    │
 │          ~75%               │
 │                             │
 ├─────────────────────────────┤
@@ -160,7 +175,7 @@ The piano roll responds to touch gestures for interactive browsing:
 | **Drag (swipe)**          | Enters browsing mode — the displayed time decouples from playback. The graph scrolls with the finger. A dashed playhead and dimmed secondary line show the actual playback position. |
 | **Lift after drag**       | Starts momentum scrolling with deceleration (friction 0.95/frame at 60fps). When momentum stops, playback auto-resumes from the browsed position.                                    |
 | **Touch during momentum** | Stops the momentum engine and re-enters the touch-and-hold state (pauses playback).                                                                                                  |
-| **Long press (~1s)**      | Finds the phrase at the touch position (or nearest phrase within ±2s) and sets up an A-B loop around it. Haptic feedback on iOS.                                                     |
+| **Long press (~1s)**      | Finds the phrase at the touch position (or nearest phrase within +/-2s) and sets up an A-B loop around it. Haptic feedback on iOS.                                                   |
 
 **Browsing mode state machine:**
 
@@ -191,7 +206,7 @@ Colors are consistent across all difficulty levels; the cent thresholds change p
 - **Orange**: Fair (outer zone)
 - **Gray**: Poor (outside all zones)
 
-Difficulty is selected in Settings → Difficulty (Beginner / Intermediate / Advanced). Zone bands on the piano roll visually widen or narrow to reflect the selected level.
+Difficulty is selected in Settings -> Difficulty (Beginner / Intermediate / Advanced). Zone bands on the piano roll visually widen or narrow to reflect the selected level.
 
 ---
 
@@ -202,5 +217,5 @@ Difficulty is selected in Settings → Difficulty (Beginner / Intermediate / Adv
 - Test pitch graph rendering at 43 FPS with simultaneous video playback (performance critical)
 - Validate A-B loop controls are reachable in both layout modes
 - Test all 3 pitch visualization modes with real microphone input
-- Test piano roll gestures: touch → playback pauses; swipe → graph scrolls with momentum → playback resumes from new position; long-press ~1s → loop created around nearest phrase
+- Test piano roll gestures: touch -> playback pauses; swipe -> graph scrolls with momentum -> playback resumes from new position; long-press ~1s -> loop created around nearest phrase
 - Verify browsing edge cases: touch during momentum stops scrolling, song boundary clamping, play pressed while browsing seeks to browsed position

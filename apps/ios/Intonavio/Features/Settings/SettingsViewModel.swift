@@ -1,11 +1,9 @@
 import AVFoundation
 import Foundation
 
-/// Manages settings: account actions and audio input selection.
+/// Manages settings: audio input selection.
 @Observable
 final class SettingsViewModel {
-    var isDeleting = false
-    var showDeleteConfirmation = false
     var errorMessage: String?
     var selectedInputUID: String?
 

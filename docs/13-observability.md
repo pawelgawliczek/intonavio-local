@@ -1,96 +1,93 @@
-# Intonavio — Observability & Debugging
+# IntonavioLocal — Observability & Debugging
 
-## Correlation IDs
+## Overview
 
-Every song submission generates a `traceId` that follows the request across all services:
+IntonavioLocal runs entirely on-device. All observability is through local logging (OSLog via `AppLogger`), Xcode debugging tools, and debug artifacts that can be exported for analysis.
 
-```
-Client → API (traceId in response header)
-       → BullMQ job (traceId in job data)
-       → StemSplit webhook (traceId in metadata)
-       → Python worker (traceId in log context)
-       → R2 upload (traceId in object metadata)
-```
+---
 
-Every log line includes `traceId` + the relevant resource ID (`songId`, `exerciseId`, `userId`). You can grep a single ID and see the entire lifecycle from submission to READY/FAILED.
+## Logging
 
-## Structured Logging
+All logging uses `AppLogger`, a wrapper around `os.Logger` with categorized subsystems. No `print()` in committed code.
 
-Every log entry is JSON with mandatory fields:
+### Log Categories
 
-```json
-{
-  "level": "error",
-  "timestamp": "2025-06-01T12:00:00.123Z",
-  "service": "api",
-  "traceId": "trc_abc123",
-  "songId": "song_xyz789",
-  "module": "StemSplitService",
-  "message": "Stem download failed",
-  "error": { "code": "ECONNRESET", "attempt": 2 },
-  "durationMs": 3400
-}
-```
+| Category     | Subsystem                    | Usage                                        |
+| ------------ | ---------------------------- | -------------------------------------------- |
+| `.audio`     | `com.intonaviolocal.audio`   | Audio engine, stem playback, route changes   |
+| `.pitch`     | `com.intonaviolocal.pitch`   | Real-time pitch detection, YIN results       |
+| `.library`   | `com.intonaviolocal.library` | Song processing, StemSplit API calls         |
+| `.sessions`  | `com.intonaviolocal.sessions`| Session save/load, score recording           |
+| `.network`   | `com.intonaviolocal.network` | API requests, downloads                      |
+| `.youtube`   | `com.intonaviolocal.youtube` | YouTube player events, JS bridge             |
 
-| Field                              | Required        | Why                                                   |
-| ---------------------------------- | --------------- | ----------------------------------------------------- |
-| `traceId`                          | Yes             | Cross-service correlation                             |
-| `songId` / `exerciseId` / `userId` | When applicable | Filter logs per resource                              |
-| `module`                           | Yes             | Where in the code                                     |
-| `durationMs`                       | For operations  | Spot slow queries, slow API calls, slow processing    |
-| `error`                            | On failures     | Structured error with code, not just a message string |
+### Log Levels
 
-## Per-Layer Debugging
+| Level    | When to Use                                            |
+| -------- | ------------------------------------------------------ |
+| `debug`  | Detailed diagnostic info (only visible in Console.app) |
+| `info`   | Normal operations worth recording                      |
+| `error`  | Recoverable errors (API timeout, retry)                |
+| `fault`  | Unrecoverable errors (corrupted data, assertion)       |
 
-### API (NestJS)
+### Viewing Logs
 
-- Request/response interceptor logs: method, path, status, duration, userId for every request. Exclude body for large payloads (pitch logs), include body for mutations (POST/PUT/DELETE).
-- Slow query warning: Prisma middleware logs any query taking >100ms.
-- Failed auth attempts logged with IP and reason (expired token, invalid signature, missing header).
+- **Xcode console**: Shows logs during debug sessions
+- **Console.app**: Filter by subsystem `com.intonaviolocal.*` to see logs from device or simulator
+- **Terminal**: `log stream --predicate 'subsystem BEGINSWITH "com.intonaviolocal"'`
 
-### Job Queue (BullMQ)
+---
 
-- Log on every state transition: `job.created`, `job.active`, `job.completed`, `job.failed`, `job.retrying`.
-- Include `jobId`, `traceId`, `songId`, `attempt`, `durationMs` in every log.
-- On failure: log the full error + which attempt it was + whether it will retry or give up.
-- Stalled job detection: BullMQ's built-in stall check with alerting. A stalled job means the worker crashed mid-processing.
+## iOS Client Debugging
 
-### Python Worker
+### Pitch Detection Debug Mode
 
-- Structured JSON logging to stdout with mandatory fields: `level`, `timestamp`, `service` ("pitch-worker"), `module`, `message`.
-- Every log line includes `traceId` and `songId` for cross-service correlation.
-- Log pYIN parameters used (`fmin`, `fmax`, `hopLength`, `sampleRate`) for every analysis — reproducible locally with same params.
-- Log output stats after analysis: `frameCount`, `voicedFramePercent`, `frequencyMin`, `frequencyMax`. If `voicedFramePercent < 10%`, log a warning (bad audio).
-- Log R2 operations with `key`, `sizeBytes`, `durationMs` for both stem download and pitch JSON upload.
-- Log DB persistence with `pitchDataId`, `songId`, `durationMs`.
-- Log job lifecycle: `Job started` (with traceId, songId), `Job completed` (with durationMs), `Job failed` (with error, attempt info).
-- Heartbeat every 60s: `{"message": "heartbeat", "status": "alive"}` for health monitoring.
-- BullMQ lock duration set to 5 minutes (pYIN extraction takes ~110s on a typical song).
-- Debug mode (env flag, disabled in production): save intermediate numpy arrays to a debug path for reproducing pitch extraction issues locally.
+Available via Developer Tools in Settings (DEBUG builds only). When enabled:
 
-### iOS Client
+- Records raw mic input audio buffer alongside detected frequencies
+- Records reference pitch lookup results at each timestamp
+- Exports a debug file that can be used to reproduce scoring issues offline
 
-- Pitch detection debug mode (dev settings toggle): records raw mic input + detected frequencies + reference lookup to a local file. When a user reports "scoring feels wrong", export this file for analysis.
-- YouTube sync drift log: every sync correction (drift > 150ms) logged with `ytTime`, `stemTime`, `correction` to reveal patterns. In debug builds, every drift sample (corrected or not) is logged.
-- Audio route change log: when AirPods or other audio devices connect/disconnect, the route change reason is logged and stems are re-synced. Look for "Audio route changed" and "Re-synced stems after audio route change" entries.
-- Network request log in debug builds: all API calls with status, duration, response size.
+When a user reports "scoring feels wrong", this debug artifact allows feeding the exact audio into YIN unit tests for analysis.
 
-### Web Client
+### YouTube Sync Drift Log
 
-- AudioWorklet errors forwarded to main thread and logged to error reporting. Worklets fail silently by default — explicit forwarding required.
-- `performance.mark()` / `performance.measure()` around pitch detection cycle for Chrome DevTools profiling.
-- Canvas rendering frame drops: if piano roll drops below 30fps, log a warning with the frame time.
+Every sync correction (drift > 300ms) is logged with:
 
-## Health Checks
+- `ytTime` — YouTube player's reported time
+- `stemTime` — Stem player's current position
+- `correction` — Amount of drift corrected
 
-Every service exposes a health endpoint:
+In debug builds, every drift sample (corrected or not) is logged. This reveals patterns like consistent drift on specific videos or audio routes.
 
-| Service       | Endpoint                   | Checks                                                |
-| ------------- | -------------------------- | ----------------------------------------------------- |
-| API           | `GET /health`              | PostgreSQL connection, Redis ping, R2 reachable       |
-| API           | `GET /health/detailed`     | Queue depth, failed job count, oldest pending job age |
-| Python Worker | stdout heartbeat every 60s | Process alive, Redis connected, R2 reachable          |
-| Web           | `GET /api/health`          | API reachable from Next.js server                     |
+### Audio Route Change Log
+
+When AirPods or other audio devices connect/disconnect:
+
+- The route change reason is logged
+- Stems are re-synced (stop, re-apply volumes, restart from YouTube time)
+- Look for "Audio route changed" and "Re-synced stems after audio route change" entries
+
+### StemSplit API Request Log
+
+In debug builds, all StemSplit API calls are logged with:
+
+- Request URL, method, status code
+- Response duration
+- Error details on failure
+
+### Song Processing Pipeline Log
+
+Each step of `SongProcessingService` logs its progress:
+
+- Metadata fetch (title, artist, duration)
+- StemSplit job creation (job ID)
+- Polling status (attempt count, current status)
+- Stem downloads (file sizes, durations)
+- Pitch analysis (frame count, voiced percentage, duration)
+- Final status transition
+
+---
 
 ## Debug Reproducibility
 
@@ -100,13 +97,41 @@ For the hardest bugs, ensure reproduction outside the live app:
 | --------------------- | ---------------------------------------------- | ------------------------------------------------- |
 | Wrong pitch detection | Raw audio recording + detected frequencies log | Feed recording into YIN unit test, compare output |
 | Wrong scoring         | Session `pitchLog` JSON                        | Re-run scoring function on the saved pitchLog     |
-| Bad reference pitch   | Vocal stem file + pYIN params from log         | Run pYIN locally with same params, inspect output |
+| Bad reference pitch   | Vocal stem file + PitchAnalyzer params         | Run PitchAnalyzer on the stem, inspect output     |
 | YouTube sync drift    | Drift correction log                           | Analyze timing pattern, check if video-specific   |
-| StemSplit failure     | Request/response log with traceId              | Replay the exact API call                         |
+| StemSplit failure     | API request/response log                       | Replay the exact API call with same parameters    |
 
-## Error Reporting
+---
 
-- **API + Worker**: Sentry with `traceId` as a tag. Group by error type, not by message string.
-- **iOS**: Sentry iOS SDK. Breadcrumbs include last 5 API calls + last audio session state.
-- **Web**: Sentry browser SDK. Capture AudioWorklet errors explicitly (they don't bubble to `window.onerror`).
-- Every Sentry event includes `traceId`, `userId`, and the relevant resource ID. An error without context is useless.
+## Xcode Instruments Profiling
+
+Key performance areas to profile:
+
+| Area                   | Instrument        | What to Watch                                    |
+| ---------------------- | ----------------- | ------------------------------------------------ |
+| Audio thread           | Time Profiler     | YIN detection must complete in <1ms per callback |
+| Piano roll rendering   | Core Animation    | Should maintain ~43 FPS during practice          |
+| Pitch analysis (batch) | Time Profiler     | Full song analysis time (target: <30s)           |
+| Memory                 | Allocations       | No leaks in audio buffers or stem data           |
+| Disk I/O               | File Activity     | Stem download write performance                  |
+
+---
+
+## SwiftData Debugging
+
+- Use Xcode's SwiftData debugging: `Arguments Passed On Launch` -> `-com.apple.CoreData.SQLDebug 1`
+- Inspect the SQLite database directly at the app's Application Support directory
+- `ModelContext.save()` is called explicitly after mutations — watch for missed saves
+
+---
+
+## Common Issues & Solutions
+
+| Symptom                              | Likely Cause                                    | Fix                                              |
+| ------------------------------------ | ----------------------------------------------- | ------------------------------------------------ |
+| No pitch detection                   | Microphone permission not granted               | Check `AVAudioSession` permissions               |
+| Pitch follows the music, not voice   | AEC not working (separate engines)              | Ensure single shared `AudioEngine`               |
+| Stems out of sync with video         | Drift threshold too tight or too loose          | Check drift log, adjust 300ms threshold          |
+| Song stuck in SPLITTING              | StemSplit API timeout or invalid API key         | Check API key in Settings, check network         |
+| Pitch analysis produces all unvoiced | Vocal stem is silent or corrupted               | Re-download stems, check stem file size          |
+| Audio stops after AirPods disconnect | Engine not restarted after route change          | Check `ensureEngineRunning()` in AudioEngine     |

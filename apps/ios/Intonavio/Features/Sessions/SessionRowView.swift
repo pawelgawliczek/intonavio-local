@@ -1,12 +1,12 @@
 import SwiftUI
 
 struct SessionRowView: View {
-    let session: SessionResponse
+    let session: SessionModel
 
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Song \(session.songId.prefix(8))...")
+                Text(session.song?.title ?? "Unknown Song")
                     .font(.body)
                     .foregroundStyle(.white)
                     .lineLimit(1)
@@ -37,10 +37,7 @@ struct SessionRowView: View {
 
 private extension SessionRowView {
     var formattedDate: String {
-        if let date = ISO8601DateFormatter().date(from: session.createdAt) {
-            return date.formatted(date: .abbreviated, time: .shortened)
-        }
-        return session.createdAt
+        session.createdAt.formatted(date: .abbreviated, time: .shortened)
     }
 
     var formattedDuration: String {
@@ -56,8 +53,4 @@ private extension SessionRowView {
         default: return .red
         }
     }
-}
-
-#Preview {
-    SessionRowView(session: Fixtures.session)
 }

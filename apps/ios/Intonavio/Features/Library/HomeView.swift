@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.modelContext) private var modelContext
     @State private var viewModel = LibraryViewModel()
 
     #if os(iOS)
@@ -38,16 +39,9 @@ struct HomeView: View {
         .sheet(isPresented: $viewModel.showAddSheet) {
             AddSongSheet(viewModel: viewModel)
         }
-        .refreshable {
-            await viewModel.loadSongs()
-        }
         .onAppear {
-            if viewModel.songs.isEmpty, appState.isAuthenticated {
-                viewModel.fetchSongs()
-            }
-        }
-        .onChange(of: appState.isAuthenticated) { _, isAuthenticated in
-            if isAuthenticated, viewModel.songs.isEmpty {
+            viewModel.setModelContext(modelContext)
+            if viewModel.songs.isEmpty {
                 viewModel.fetchSongs()
             }
         }
@@ -69,7 +63,7 @@ private extension HomeView {
             }
             .padding(.horizontal)
 
-            if songs.isEmpty, !viewModel.isLoading {
+            if viewModel.songs.isEmpty, !viewModel.isLoading {
                 emptyState
             } else {
                 songGrid
@@ -79,7 +73,7 @@ private extension HomeView {
 
     var songGrid: some View {
         LazyVGrid(columns: columns, spacing: 16) {
-            ForEach(songs) { song in
+            ForEach(viewModel.songs, id: \.id) { song in
                 NavigationLink(value: song.id) {
                     SongGridItemView(song: song)
                 }
@@ -89,7 +83,11 @@ private extension HomeView {
         .padding(.horizontal)
         .navigationDestination(for: String.self) { songId in
             if let song = viewModel.songs.first(where: { $0.id == songId }) {
-                SongPracticeView(songId: song.id, videoId: song.videoId, stems: song.stems, hasPitchData: song.pitchData != nil)
+                SongPracticeView(
+                    songId: song.id,
+                    videoId: song.videoId,
+                    songStems: song.stems
+                )
             }
         }
     }
@@ -119,14 +117,11 @@ private extension HomeView {
             ExerciseSectionView()
         }
     }
-
-    var songs: [SongResponse] {
-        viewModel.songs
-    }
 }
 
 #Preview {
     NavigationStack {
         HomeView()
     }
+    .environment(AppState())
 }

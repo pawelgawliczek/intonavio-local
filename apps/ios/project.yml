@@ -1,6 +1,6 @@
-name: Intonavio
+name: IntonavioLocal
 options:
-  bundleIdPrefix: com.intonavio
+  bundleIdPrefix: com.intonaviolocal
   deploymentTarget:
     iOS: '17.0'
     macOS: '14.0'
@@ -15,11 +15,15 @@ settings:
     CODE_SIGN_STYLE: Automatic
 
 targets:
-  Intonavio:
+  IntonavioLocal:
     type: application
     platform: iOS
     sources:
       - path: Intonavio
+        excludes:
+          - "Resources/GeneralUser-GS/documentation/**"
+          - "Resources/GeneralUser-GS/demo MIDIs/**"
+          - "Resources/GeneralUser-GS/support/**"
     info:
       path: Intonavio/Info.plist
       properties:
@@ -27,40 +31,36 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations: {}
-        NSMicrophoneUsageDescription: 'Intonavio needs microphone access to detect your singing pitch in real-time.'
-        NSLocalNetworkUsageDescription: 'Intonavio uses a local server to load the YouTube player.'
+        NSMicrophoneUsageDescription: 'IntonavioLocal needs microphone access to detect your singing pitch in real-time.'
+        NSLocalNetworkUsageDescription: 'IntonavioLocal uses a local server to load the YouTube player.'
     entitlements:
       path: Intonavio/Intonavio.entitlements
-      properties:
-        com.apple.developer.applesignin:
-          - Default
     settings:
       base:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: 'UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight'
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: 'UIInterfaceOrientationPortrait'
-        PRODUCT_BUNDLE_IDENTIFIER: com.intonavio.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.intonaviolocal.app
         MARKETING_VERSION: '1.0.0'
         CURRENT_PROJECT_VERSION: 1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SUPPORTED_PLATFORMS: 'iphoneos iphonesimulator'
         SUPPORTS_MACCATALYST: false
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: false
-      configs:
-        Debug:
-          API_BASE_URL: 'http://localhost:3000/v1'
-        Release:
-          API_BASE_URL: 'http://localhost:3000/v1'
 
-  IntonavioMac:
+  IntonavioLocalMac:
     type: application
     platform: macOS
     sources:
       - path: Intonavio
+        excludes:
+          - "Resources/GeneralUser-GS/documentation/**"
+          - "Resources/GeneralUser-GS/demo MIDIs/**"
+          - "Resources/GeneralUser-GS/support/**"
     info:
       path: Intonavio/Info-macOS.plist
       properties:
-        NSMicrophoneUsageDescription: 'Intonavio needs microphone access to detect your singing pitch in real-time.'
-        NSLocalNetworkUsageDescription: 'Intonavio uses a local server to load the YouTube player.'
+        NSMicrophoneUsageDescription: 'IntonavioLocal needs microphone access to detect your singing pitch in real-time.'
+        NSLocalNetworkUsageDescription: 'IntonavioLocal uses a local server to load the YouTube player.'
     entitlements:
       path: Intonavio/IntonavioMac.entitlements
       properties:
@@ -68,30 +68,23 @@ targets:
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.security.device.audio-input: true
-        com.apple.developer.applesignin:
-          - Default
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.intonavio.mac
+        PRODUCT_BUNDLE_IDENTIFIER: com.intonaviolocal.mac
         MARKETING_VERSION: '1.0.0'
         CURRENT_PROJECT_VERSION: 1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-      configs:
-        Debug:
-          API_BASE_URL: 'http://localhost:3000/v1'
-        Release:
-          API_BASE_URL: 'http://localhost:3000/v1'
 
-  IntonavioTests:
+  IntonavioLocalTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: IntonavioTests
     dependencies:
-      - target: Intonavio
+      - target: IntonavioLocal
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
-        PRODUCT_BUNDLE_IDENTIFIER: com.intonavio.app.tests
-        TEST_HOST: '$(BUILT_PRODUCTS_DIR)/Intonavio.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Intonavio'
+        PRODUCT_BUNDLE_IDENTIFIER: com.intonaviolocal.app.tests
+        TEST_HOST: '$(BUILT_PRODUCTS_DIR)/IntonavioLocal.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/IntonavioLocal'
         BUNDLE_LOADER: '$(TEST_HOST)'

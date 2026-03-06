@@ -31,21 +31,13 @@ extension PracticeViewModel {
         pitchDetector?.onPitchDetected = nil
     }
 
-    /// Load reference pitch data if available and cached.
+    /// Load reference pitch data from local Documents storage.
     func loadPitchDataIfAvailable() {
-        guard PitchDataDownloader.isCached(songId: songId) else {
+        let url = LocalStorageService.pitchDataURL(songId: songId)
+        guard FileManager.default.fileExists(atPath: url.path) else {
             isPitchReady = false
             return
         }
-
-        let caches = FileManager.default.urls(
-            for: .cachesDirectory,
-            in: .userDomainMask
-        )[0]
-        let url = caches
-            .appendingPathComponent("pitch", isDirectory: true)
-            .appendingPathComponent(songId, isDirectory: true)
-            .appendingPathComponent("reference.json")
 
         do {
             try referenceStore.load(from: url)
@@ -57,33 +49,6 @@ extension PracticeViewModel {
             AppLogger.pitch.error(
                 "Failed to load pitch data: \(error.localizedDescription)"
             )
-        }
-    }
-
-    /// Download pitch data if the song has it but it's not yet cached.
-    func downloadPitchDataIfNeeded(
-        hasPitchData: Bool,
-        apiClient: any APIClientProtocol
-    ) {
-        guard hasPitchData,
-              !PitchDataDownloader.isCached(songId: songId) else {
-            return
-        }
-
-        Task {
-            do {
-                _ = try await PitchDataDownloader.localURL(
-                    songId: songId,
-                    apiClient: apiClient
-                )
-                await MainActor.run {
-                    loadPitchDataIfAvailable()
-                }
-            } catch {
-                AppLogger.pitch.error(
-                    "Failed to download pitch data: \(error.localizedDescription)"
-                )
-            }
         }
     }
 
@@ -132,7 +97,7 @@ extension PracticeViewModel {
         )
         detectedPoints.append(point)
 
-        // Keep buffer at reasonable size (last 30 seconds at ~172/sec ≈ 5160 points)
+        // Keep buffer at reasonable size (last 30 seconds at ~172/sec = 5160 points)
         if detectedPoints.count > 6000 {
             detectedPoints.removeFirst(1000)
         }

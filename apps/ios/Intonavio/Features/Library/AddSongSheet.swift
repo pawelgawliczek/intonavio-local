@@ -42,6 +42,12 @@ private extension AddSongSheet {
                 .font(.caption)
                 .foregroundStyle(Color.intonavioTextSecondary)
                 .multilineTextAlignment(.center)
+
+            if !KeychainService.hasStemSplitAPIKey {
+                Label("Set your StemSplit API key in Settings first", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         }
     }
 
@@ -76,5 +82,5 @@ private extension AddSongSheet {
 }
 
 #Preview {
-    AddSongSheet(viewModel: LibraryViewModel(apiClient: MockAPIClient()))
+    AddSongSheet(viewModel: LibraryViewModel())
 }

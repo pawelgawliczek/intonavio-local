@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SongGridItemView: View {
-    let song: SongResponse
+    let song: SongModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -79,6 +79,13 @@ private extension SongGridItemView {
 }
 
 #Preview {
-    SongGridItemView(song: Fixtures.readySong)
-        .frame(width: 160)
+    SongGridItemView(song: SongModel(
+        videoId: "dQw4w9WgXcQ",
+        title: "Rick Astley - Never Gonna Give You Up",
+        artist: "Rick Astley",
+        thumbnailUrl: "https://img.youtube.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
+        duration: 213,
+        status: .ready
+    ))
+    .frame(width: 160)
 }

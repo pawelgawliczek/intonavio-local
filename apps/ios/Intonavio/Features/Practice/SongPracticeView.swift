@@ -4,8 +4,7 @@ import SwiftUI
 struct SongPracticeView: View {
     var songId: String = ""
     var videoId: String = ""
-    var stems: [StemResponse] = []
-    var hasPitchData: Bool = false
+    var songStems: [StemModel] = []
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -40,7 +39,7 @@ struct SongPracticeView: View {
                     Button("Done") {
                         vm.saveSongScore()
                         vm.stopPitchDetection()
-                        vm.saveSessionIfNeeded()
+                        vm.saveSessionIfNeeded(modelContext: modelContext)
                         vm.server.stop()
                         dismiss()
                     }
@@ -72,7 +71,7 @@ struct SongPracticeView: View {
         .onAppear { setupIfNeeded() }
         .onDisappear {
             viewModel?.stopPitchDetection()
-            viewModel?.saveSessionIfNeeded()
+            viewModel?.saveSessionIfNeeded(modelContext: modelContext)
             viewModel?.sync?.stop()
             viewModel?.stemPlayer.teardown()
             viewModel?.server.stop()
@@ -117,7 +116,7 @@ private struct SongPracticeKeyboardShortcuts: ViewModifier {
                 guard press.modifiers.contains(.command) else { return .ignored }
                 viewModel?.saveSongScore()
                 viewModel?.stopPitchDetection()
-                viewModel?.saveSessionIfNeeded()
+                viewModel?.saveSessionIfNeeded(modelContext: nil)
                 viewModel?.server.stop()
                 dismiss()
                 return .handled
@@ -326,14 +325,10 @@ private extension SongPracticeView {
     func setupIfNeeded() {
         guard viewModel == nil else { return }
         let vm = PracticeViewModel(songId: songId, videoId: videoId)
-        vm.stems = stems
+        vm.stems = songStems
         vm.scoreRepository = ScoreRepository(modelContext: modelContext)
         vm.configure()
         vm.preloadStems()
-        vm.downloadPitchDataIfNeeded(
-            hasPitchData: hasPitchData,
-            apiClient: APIClient()
-        )
         viewModel = vm
     }
 }

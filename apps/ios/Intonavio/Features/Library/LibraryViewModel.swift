@@ -1,9 +1,10 @@
 import Foundation
+import SwiftData
 
-/// Manages the user's song library: fetching, adding, polling.
+/// Manages the user's song library using local SwiftData storage.
 @Observable
 final class LibraryViewModel {
-    var songs: [SongResponse] = []
+    var songs: [SongModel] = []
     var isLoading = false
     var isAddingSong = false
     var errorMessage: String?
@@ -11,38 +12,27 @@ final class LibraryViewModel {
     var addSongURL = ""
     var addSongError: String?
 
-    private let apiClient: any APIClientProtocol
-    private var pollingTask: Task<Void, Never>?
+    let processingService = SongProcessingService()
+    private var modelContext: ModelContext?
 
-    init(apiClient: any APIClientProtocol = APIClient()) {
-        self.apiClient = apiClient
-    }
-
-    deinit {
-        pollingTask?.cancel()
+    func setModelContext(_ context: ModelContext) {
+        modelContext = context
     }
 
     // MARK: - Fetch Songs
 
     func fetchSongs() {
-        guard !isLoading else { return }
-        Task { @MainActor in
-            await loadSongs()
-        }
-    }
-
-    @MainActor
-    func loadSongs() async {
+        guard let modelContext else { return }
         isLoading = true
         errorMessage = nil
 
         do {
-            let response = try await apiClient.listSongs(page: 1, limit: 100)
-            songs = response.data
-            startPollingIfNeeded()
-            cacheMissingPitchData()
+            let descriptor = FetchDescriptor<SongModel>(
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+            songs = try modelContext.fetch(descriptor)
         } catch {
-            errorMessage = (error as? APIError)?.message ?? error.localizedDescription
+            errorMessage = error.localizedDescription
             AppLogger.library.error("Failed to load songs: \(error.localizedDescription)")
         }
 
@@ -58,60 +48,24 @@ final class LibraryViewModel {
         }
     }
 
-    // MARK: - Refresh Single Song
+    // MARK: - Delete Song
 
     @MainActor
-    func refreshSong(id: String) async {
-        do {
-            let previous = songs.first { $0.id == id }
-            let updated = try await apiClient.getSong(id: id)
-            if let index = songs.firstIndex(where: { $0.id == id }) {
-                songs[index] = updated
-            }
-
-            let justBecameReady = previous?.status.isProcessing == true
-                && updated.status == .ready
-            if justBecameReady, updated.pitchData != nil {
-                downloadPitchData(songId: id)
-            }
-        } catch {
-            AppLogger.library.error("Failed to refresh song \(id): \(error.localizedDescription)")
-        }
+    func deleteSong(_ song: SongModel) {
+        guard let modelContext else { return }
+        processingService.cancelProcessing(songId: song.id)
+        LocalStorageService.deleteSongFiles(songId: song.id)
+        modelContext.delete(song)
+        try? modelContext.save()
+        songs.removeAll { $0.id == song.id }
     }
 
-    private func downloadPitchData(songId: String) {
-        guard !PitchDataDownloader.isCached(songId: songId) else { return }
-        Task {
-            do {
-                _ = try await PitchDataDownloader.localURL(
-                    songId: songId,
-                    apiClient: apiClient
-                )
-            } catch {
-                AppLogger.library.error(
-                    "Failed to download pitch data for \(songId): \(error.localizedDescription)"
-                )
-            }
-        }
-    }
+    // MARK: - Retry Failed
 
-    /// Download pitch data for all READY songs that have it but aren't cached yet.
-    /// Runs in the background after loading the song list.
-    private func cacheMissingPitchData() {
-        let needsDownload = songs.filter { song in
-            song.status == .ready
-                && song.pitchData != nil
-                && !PitchDataDownloader.isCached(songId: song.id)
-        }
-
-        for song in needsDownload {
-            downloadPitchData(songId: song.id)
-        }
-
-        if !needsDownload.isEmpty {
-            let count = needsDownload.count
-            AppLogger.library.info("Downloading pitch data for \(count) songs")
-        }
+    @MainActor
+    func retryFailed(_ song: SongModel) {
+        guard let modelContext else { return }
+        processingService.retryFailed(song: song, modelContext: modelContext)
     }
 }
 
@@ -120,26 +74,39 @@ final class LibraryViewModel {
 private extension LibraryViewModel {
     @MainActor
     func performAddSong() async {
+        guard let modelContext else { return }
         isAddingSong = true
         addSongError = nil
 
+        guard KeychainService.hasStemSplitAPIKey else {
+            addSongError = "Set your StemSplit API key in Settings first."
+            isAddingSong = false
+            return
+        }
+
+        let videoId = YouTubeURLValidator.extractVideoId(addSongURL)
+        guard let videoId, !videoId.isEmpty else {
+            addSongError = "Could not extract video ID from URL"
+            isAddingSong = false
+            return
+        }
+
         do {
-            let response = try await apiClient.createSong(
-                CreateSongRequest(youtubeUrl: addSongURL)
+            let song = try await processingService.processSong(
+                youtubeUrl: addSongURL,
+                videoId: videoId,
+                modelContext: modelContext
             )
 
-            if let index = songs.firstIndex(where: { $0.id == response.id }) {
-                songs[index] = response
-            } else {
-                songs.insert(response, at: 0)
+            if !songs.contains(where: { $0.id == song.id }) {
+                songs.insert(song, at: 0)
             }
 
             addSongURL = ""
             showAddSheet = false
-            startPollingIfNeeded()
-            AppLogger.library.info("Song added: \(response.id)")
+            AppLogger.library.info("Song added: \(song.id)")
         } catch {
-            addSongError = (error as? APIError)?.message ?? error.localizedDescription
+            addSongError = error.localizedDescription
             AppLogger.library.error("Failed to add song: \(error.localizedDescription)")
         }
 
@@ -156,40 +123,5 @@ private extension LibraryViewModel {
             return false
         }
         return true
-    }
-
-    // MARK: - Polling
-
-    func startPollingIfNeeded() {
-        let hasProcessing = songs.contains { $0.status.isProcessing }
-        guard hasProcessing else {
-            pollingTask?.cancel()
-            pollingTask = nil
-            return
-        }
-
-        guard pollingTask == nil else { return }
-
-        pollingTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                guard !Task.isCancelled, let self else { break }
-
-                let processingIds = self.songs
-                    .filter { $0.status.isProcessing }
-                    .map(\.id)
-
-                guard !processingIds.isEmpty else { break }
-
-                for id in processingIds {
-                    await self.refreshSong(id: id)
-                }
-
-                let stillProcessing = self.songs.contains { $0.status.isProcessing }
-                if !stillProcessing { break }
-            }
-
-            self?.pollingTask = nil
-        }
     }
 }

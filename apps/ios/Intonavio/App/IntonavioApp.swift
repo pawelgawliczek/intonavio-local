@@ -20,7 +20,12 @@ struct IntonavioApp: App {
         WindowGroup {
             ContentView()
                 .environment(appState)
-                .modelContainer(for: ScoreRecord.self)
+                .modelContainer(for: [
+                    ScoreRecord.self,
+                    SongModel.self,
+                    StemModel.self,
+                    SessionModel.self
+                ])
                 .preferredColorScheme(.dark)
         }
         #if os(macOS)
