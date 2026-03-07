@@ -4,7 +4,7 @@ A fully on-device singing practice app that turns any YouTube song into a pitch 
 
 This is the local-only version of [Intonavio](https://github.com/pawelgawliczek/intonavio). No backend server required — all pitch analysis, data storage, and session tracking happen on-device. The only external dependency is the StemSplit API for stem separation (you provide your own API key).
 
-**[Read the blog post](https://pawelgawliczek.cloud/blog/i-built-a-singing-practice-app-because-my-ear-wasnt-ready)** · **[App page](https://pawelgawliczek.cloud/apps/intonavio)**
+**[Read the blog post](https://pawelgawliczek.cloud/blog/using-ai-to-help-my-singing)** · **[App page](https://pawelgawliczek.cloud/apps/intonavio)**
 
 ## Screenshots
 
