@@ -1,4 +1,7 @@
 import AVFoundation
+#if os(macOS)
+import CoreAudio
+#endif
 
 /// Shared AVAudioEngine wrapper that owns a single engine instance.
 /// Enables voice processing (AEC) on the input node so the microphone
@@ -16,6 +19,13 @@ final class AudioEngine {
     let engine = AVAudioEngine()
     private(set) var isRunning = false
     private var isPrepared = false
+
+    /// Fan-out single input tap to multiple consumers (pitch detection + recording).
+    private(set) lazy var inputTapRouter = InputTapRouter(engine: self)
+
+    /// Whether the current audio route uses Bluetooth output (e.g. AirPods).
+    /// When true, voice processing (AEC) is skipped and mic gain is boosted.
+    private(set) var isBluetoothRoute = false
 
     #if os(iOS)
     private var interruptionObserver: NSObjectProtocol?
@@ -37,12 +47,27 @@ final class AudioEngine {
 
         #if os(iOS)
         try AudioSessionManager.configure()
+        isBluetoothRoute = detectBluetoothRoute()
         #endif
 
         let inputNode = engine.inputNode
+
+        #if os(macOS)
+        // macOS VP requires matching input/output hardware sample rates.
+        // Use CoreAudio HAL to set the default output device rate to match input.
+        matchOutputSampleRateToInput()
+        #endif
+
+        // Always enable VP — toggling it disrupts the audio graph and resets
+        // mixer connections. With Bluetooth (no speaker bleed), AEC is a no-op
+        // but harmless. PitchDetector compensates with a mic gain boost instead.
         if !inputNode.isVoiceProcessingEnabled {
             try inputNode.setVoiceProcessingEnabled(true)
             AppLogger.audio.info("Voice processing (AEC) enabled on shared engine")
+        }
+
+        if isBluetoothRoute {
+            AppLogger.audio.info("Bluetooth route detected — mic gain boost active")
         }
 
         isPrepared = true
@@ -158,6 +183,21 @@ final class AudioEngine {
     }
 }
 
+// MARK: - Bluetooth Route Detection (iOS)
+
+#if os(iOS)
+extension AudioEngine {
+    func detectBluetoothRoute() -> Bool {
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        return outputs.contains { output in
+            output.portType == .bluetoothA2DP
+                || output.portType == .bluetoothLE
+                || output.portType == .bluetoothHFP
+        }
+    }
+}
+#endif
+
 // MARK: - Interruption & Route Change Handling (iOS)
 
 #if os(iOS)
@@ -225,11 +265,85 @@ private extension AudioEngine {
         switch reason {
         case .newDeviceAvailable, .oldDeviceUnavailable:
             AppLogger.audio.info("Audio route changed: \(reason.rawValue)")
+            isBluetoothRoute = detectBluetoothRoute()
+            AppLogger.audio.info("Bluetooth route: \(self.isBluetoothRoute)")
             ensureRunning()
             onRouteChange?()
         default:
             break
         }
+    }
+}
+#endif
+
+// MARK: - macOS Sample Rate Matching
+
+#if os(macOS)
+private extension AudioEngine {
+    /// Set the default output device's sample rate to match the default input
+    /// device. VP creates an aggregate device and requires both sides to agree.
+    func matchOutputSampleRateToInput() {
+        guard let inputRate = hardwareSampleRate(forDefaultDevice: true),
+              let outputRate = hardwareSampleRate(forDefaultDevice: false),
+              inputRate != outputRate, inputRate > 0
+        else { return }
+
+        let outputID = defaultAudioDeviceID(input: false)
+        guard outputID != kAudioObjectUnknown else { return }
+
+        var rate = inputRate
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectSetPropertyData(
+            outputID, &address, 0, nil,
+            UInt32(MemoryLayout<Float64>.size), &rate
+        )
+        if status == noErr {
+            AppLogger.audio.info(
+                "Set output device sample rate from \(outputRate) to \(inputRate)"
+            )
+        } else {
+            AppLogger.audio.error(
+                "Failed to set output sample rate: \(status)"
+            )
+        }
+    }
+
+    func defaultAudioDeviceID(input: Bool) -> AudioDeviceID {
+        var address = AudioObjectPropertyAddress(
+            mSelector: input
+                ? kAudioHardwarePropertyDefaultInputDevice
+                : kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID: AudioDeviceID = kAudioObjectUnknown
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address, 0, nil, &size, &deviceID
+        )
+        return deviceID
+    }
+
+    func hardwareSampleRate(forDefaultDevice input: Bool) -> Float64? {
+        let deviceID = defaultAudioDeviceID(input: input)
+        guard deviceID != kAudioObjectUnknown else { return nil }
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        let status = AudioObjectGetPropertyData(
+            deviceID, &address, 0, nil, &size, &rate
+        )
+        return status == noErr ? rate : nil
     }
 }
 #endif

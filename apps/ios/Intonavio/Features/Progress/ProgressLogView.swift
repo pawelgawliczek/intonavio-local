@@ -5,6 +5,7 @@ struct ProgressLogView: View {
     let songId: String
     let totalPhrases: Int
     let scoreRepository: ScoreRepository?
+    var instrumentalURL: URL?
     var onPhraseTap: ((Int) -> Void)?
 
     @State private var isShowingResetConfirmation = false
@@ -12,7 +13,10 @@ struct ProgressLogView: View {
     var body: some View {
         NavigationStack {
             List {
+                scoreChartSection
+                practiceFrequencySection
                 songSummarySection
+                bestTakeSection
                 if totalPhrases > 0 {
                     phraseBreakdownSection
                 }
@@ -29,6 +33,7 @@ struct ProgressLogView: View {
             ) {
                 Button("Reset Scores", role: .destructive) {
                     scoreRepository?.deleteAllScores(songId: songId)
+                    BestTakeStorage.delete(for: songId)
                 }
             } message: {
                 Text("This will delete all phrase and song scores across all difficulties. This cannot be undone.")
@@ -40,6 +45,18 @@ struct ProgressLogView: View {
 // MARK: - Sections
 
 private extension ProgressLogView {
+    var scoreChartSection: some View {
+        Section("Score History") {
+            ScoreHistoryChartView(scores: songHistory)
+        }
+    }
+
+    var practiceFrequencySection: some View {
+        Section("Practice Activity") {
+            PracticeFrequencyChartView(scores: allSongScores)
+        }
+    }
+
     var songSummarySection: some View {
         Section("Overall") {
             HStack {
@@ -63,6 +80,26 @@ private extension ProgressLogView {
                 Spacer()
                 Text("\(songAttemptCount)")
                     .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    var bestTakeSection: some View {
+        Section("Best Take") {
+            if BestTakeStorage.exists(for: songId), instrumentalURL != nil {
+                BestTakeRowView(
+                    songId: songId,
+                    instrumentalURL: instrumentalURL
+                )
+            } else if instrumentalURL == nil {
+                Text("Instrumental stem required for Best Take")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Sing the full song to save your best take")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -110,6 +147,14 @@ private extension ProgressLogView {
 // MARK: - Data
 
 private extension ProgressLogView {
+    var songHistory: [ScoreRecord] {
+        scoreRepository?.fetchHistory(songId: songId, phraseIndex: nil) ?? []
+    }
+
+    var allSongScores: [ScoreRecord] {
+        scoreRepository?.fetchAllScores(songId: songId) ?? []
+    }
+
     var songBestScore: Double {
         scoreRepository?.fetchBestScore(songId: songId, phraseIndex: nil) ?? 0
     }
@@ -127,5 +172,5 @@ private extension ProgressLogView {
 }
 
 #Preview {
-    ProgressLogView(songId: "test", totalPhrases: 5, scoreRepository: nil)
+    ProgressLogView(songId: "test", totalPhrases: 5, scoreRepository: nil, instrumentalURL: nil)
 }

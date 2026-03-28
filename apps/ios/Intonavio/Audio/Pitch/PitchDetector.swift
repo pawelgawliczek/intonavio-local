@@ -59,7 +59,8 @@ final class PitchDetector {
             maxLag: Int(actualSampleRate / PitchConstants.minFrequency)
         )
 
-        audioEngine.installInputTap(
+        audioEngine.inputTapRouter.addConsumer(
+            id: "pitch",
             bufferSize: PitchConstants.ioBufferSize,
             format: format
         ) { [weak self] buffer, _ in
@@ -74,7 +75,7 @@ final class PitchDetector {
 
     func stop() {
         guard isRunning else { return }
-        audioEngine.removeInputTap()
+        audioEngine.inputTapRouter.removeConsumer(id: "pitch")
         isRunning = false
         latestResult = nil
         AppLogger.pitch.info("PitchDetector stopped")
@@ -82,7 +83,7 @@ final class PitchDetector {
 
     deinit {
         if isRunning {
-            audioEngine.removeInputTap()
+            audioEngine.inputTapRouter.removeConsumer(id: "pitch")
         }
     }
 }
@@ -96,9 +97,12 @@ private extension PitchDetector {
         let frameCount = Int(buffer.frameLength)
         let rawPtr = channelData[0]
         let ringSize = ringBuffer.count
+        let gain = audioEngine.isBluetoothRoute
+            ? PitchConstants.bluetoothMicGain
+            : Float(1.0)
 
         for i in 0..<frameCount {
-            ringBuffer[writeIndex] = rawPtr[i]
+            ringBuffer[writeIndex] = rawPtr[i] * gain
             writeIndex = (writeIndex + 1) % ringSize
             samplesAccumulated += 1
 

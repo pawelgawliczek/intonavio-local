@@ -24,7 +24,8 @@ struct IntonavioApp: App {
                     ScoreRecord.self,
                     SongModel.self,
                     StemModel.self,
-                    SessionModel.self
+                    SessionModel.self,
+                    Recording.self
                 ])
                 .preferredColorScheme(.dark)
         }

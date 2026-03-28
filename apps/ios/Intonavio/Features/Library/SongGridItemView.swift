@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SongGridItemView: View {
     let song: SongModel
+    var isOfflineUnavailable = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -14,6 +15,18 @@ struct SongGridItemView: View {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5)
         )
+        .opacity(isOfflineUnavailable ? 0.4 : 1.0)
+        .overlay(alignment: .bottom) {
+            if isOfflineUnavailable {
+                Text("Not downloaded")
+                    .font(.caption2)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.7), in: Capsule())
+                    .padding(.bottom, 8)
+            }
+        }
     }
 }
 
@@ -21,33 +34,12 @@ struct SongGridItemView: View {
 
 private extension SongGridItemView {
     var thumbnail: some View {
-        AsyncImage(url: URL(string: song.thumbnailUrl)) { phase in
-            switch phase {
-            case .success(let image):
-                image
-                    .resizable()
-                    .aspectRatio(16 / 9, contentMode: .fill)
-            case .failure:
-                placeholder
-            default:
-                placeholder.overlay { ProgressView() }
-            }
-        }
-        .frame(height: 100)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(alignment: .topTrailing) {
-            SongStatusBadge(status: song.status.rawValue)
-                .padding(6)
-        }
-    }
-
-    var placeholder: some View {
-        RoundedRectangle(cornerRadius: 8)
-            .fill(Color.intonavioSurface)
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .overlay {
-                Image(systemName: "music.note")
-                    .foregroundStyle(Color.intonavioTextSecondary)
+        CachedAsyncImage(url: URL(string: song.thumbnailUrl))
+            .frame(height: 100)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(alignment: .topTrailing) {
+                SongStatusBadge(status: song.status.rawValue)
+                    .padding(6)
             }
     }
 

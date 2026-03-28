@@ -4,6 +4,7 @@ struct HomeView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.modelContext) private var modelContext
     @State private var viewModel = LibraryViewModel()
+    private var network: NetworkMonitor { NetworkMonitor.shared }
 
     #if os(iOS)
     private let columns = [
@@ -22,18 +23,28 @@ struct HomeView: View {
                 songSection
                 Divider()
                 exerciseSection
+                Divider()
+                recordingsSection
             }
             .padding(.vertical)
         }
         .background(Color.intonavioBackground.ignoresSafeArea())
         .navigationTitle("Library")
         .toolbar {
+            if !network.isConnected {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Label("Offline", systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(Color.intonavioTextSecondary)
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     viewModel.showAddSheet = true
                 } label: {
                     Image(systemName: "plus")
                 }
+                .disabled(!network.isConnected)
             }
         }
         .sheet(isPresented: $viewModel.showAddSheet) {
@@ -74,10 +85,18 @@ private extension HomeView {
     var songGrid: some View {
         LazyVGrid(columns: columns, spacing: 16) {
             ForEach(viewModel.songs, id: \.id) { song in
-                NavigationLink(value: song.id) {
-                    SongGridItemView(song: song)
+                let isAvailableOffline = isSongAvailableOffline(song)
+                if !network.isConnected && !isAvailableOffline {
+                    SongGridItemView(
+                        song: song,
+                        isOfflineUnavailable: true
+                    )
+                } else {
+                    NavigationLink(value: song.id) {
+                        SongGridItemView(song: song)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal)
@@ -86,10 +105,21 @@ private extension HomeView {
                 SongPracticeView(
                     songId: song.id,
                     videoId: song.videoId,
-                    songStems: song.stems
+                    songStems: song.stems,
+                    songTitle: song.title,
+                    songArtist: song.artist,
+                    songDuration: song.duration
                 )
             }
         }
+    }
+
+    func isSongAvailableOffline(_ song: SongModel) -> Bool {
+        guard song.status == .ready else { return false }
+        let hasStemFiles = song.stems.allSatisfy { stem in
+            FileManager.default.fileExists(atPath: stem.localPath)
+        }
+        return hasStemFiles && LocalStorageService.pitchDataExists(songId: song.id)
     }
 
     var emptyState: some View {
@@ -116,6 +146,10 @@ private extension HomeView {
 
             ExerciseSectionView()
         }
+    }
+
+    var recordingsSection: some View {
+        RecordingsSectionView()
     }
 }
 

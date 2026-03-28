@@ -23,7 +23,8 @@ final class PracticeViewModel {
 
     // Pitch
     var isPitchReady = false
-    var layoutMode: PracticeLayoutMode = .lyricsFocused
+    var isPitchLoading = false
+    var layoutMode: PracticeLayoutMode = .lyrics
     var visualizationMode: VisualizationMode = .zonesLine
     var detectedPoints: [DetectedPitchPoint] = []
     var transposeSemitones: Int = 0
@@ -46,6 +47,8 @@ final class PracticeViewModel {
     var isPhraseNewBest = false
     var isSongNewBest = false
     var songBestScore: Double = 0
+    var isSongScoreInvalidated = false
+    var isSongScoreSaved = false
     var scoreRepository: ScoreRepository?
 
     var transposedMidiMin: Float {
@@ -77,6 +80,16 @@ final class PracticeViewModel {
     var pitchDetector: PitchDetector?
     let referenceStore = ReferencePitchStore()
     var scoringEngine: ScoringEngine?
+
+    // Lyrics
+    let lyricsProvider = LyricsProvider()
+
+    // Best take recording
+    var streamingRecorder: StreamingRecorder?
+    var bestTakeStartTime: Double = 0
+    var bestTakeTempURL: URL?
+    /// Deferred until first YouTube time update, like stems.
+    var pendingBestTakeStart = false
 
     private weak var webViewRef: WKWebView?
     var loopCheckTask: Task<Void, Never>?
@@ -181,6 +194,7 @@ final class PracticeViewModel {
         }
 
         startPitchDetection()
+        pendingBestTakeStart = streamingRecorder == nil && !isSongScoreInvalidated
 
         if markerA != nil, markerB != nil {
             loopState = .looping
@@ -193,6 +207,7 @@ final class PracticeViewModel {
     func pause() {
         isWaitingForLoopSeek = false
         pendingStemStart = false
+        pendingBestTakeStart = false
         controller.pause()
         controller.stopTimePolling()
         loopState = .paused
@@ -223,6 +238,9 @@ final class PracticeViewModel {
 
     func seek(to time: Double) {
         currentTime = time
+        detectedPoints.removeAll { $0.time >= time }
+        isSongScoreInvalidated = true
+        invalidateBestTakeRecording()
         controller.seek(to: time)
         if isInStemMode {
             stemPlayer.seek(to: time)
@@ -254,6 +272,8 @@ final class PracticeViewModel {
         loopScores = []
         lastLoopScore = nil
         loopScoreImprovement = nil
+        isSongScoreInvalidated = true
+        invalidateBestTakeRecording()
 
         if let range = referenceStore.midiRange(from: a, to: currentTime) {
             loopMidiMin = range.min
@@ -278,6 +298,7 @@ final class PracticeViewModel {
     /// Adds breathing room before the phrase start so the singer can prepare.
     func setupPhraseLoop(phraseIndex: Int) {
         guard phraseIndex >= 0, phraseIndex < referenceStore.phrases.count else { return }
+        isSongScoreInvalidated = true
 
         let phrase = referenceStore.phrases[phraseIndex]
 
@@ -370,10 +391,16 @@ private extension PracticeViewModel {
     }
 
     func startStemsIfPending(at time: Double) {
-        guard pendingStemStart else { return }
-        pendingStemStart = false
-        stemPlayer.play(from: time)
-        sync?.start()
+        if pendingStemStart {
+            pendingStemStart = false
+            stemPlayer.play(from: time)
+            sync?.start()
+        }
+
+        if pendingBestTakeStart {
+            pendingBestTakeStart = false
+            startBestTakeRecording()
+        }
     }
 
     func handleAudioRouteChange() {
@@ -408,6 +435,8 @@ private extension PracticeViewModel {
                 loopState = .idle
                 controller.stopTimePolling()
                 stopLoopCheck()
+                stopPitchDetection()
+                saveSongScore()
                 if isInStemMode {
                     stemPlayer.stop()
                     sync?.stop()
